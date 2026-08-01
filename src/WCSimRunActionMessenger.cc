@@ -7,6 +7,16 @@
 #include "G4UIcmdWithAString.hh"
 #include "G4UIcmdWithABool.hh"
 
+namespace {
+G4bool gSaveAllSecondaryTruthTrees = true;
+G4UIcmdWithABool* gSaveAllSecondaryTruthTreesCommand = nullptr;
+}
+
+G4bool WCSimSaveAllSecondaryTruthTrees()
+{
+  return gSaveAllSecondaryTruthTrees;
+}
+
 WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
 :WCSimRun(WCSimRA)
 { 
@@ -39,6 +49,15 @@ WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
   UseTimer->SetGuidance("Use a timer for runtime");
   UseTimer->SetParameterName("UseTimer",true);
   UseTimer->SetDefaultValue(false);
+
+  gSaveAllSecondaryTruthTreesCommand = new G4UIcmdWithABool(
+      "/WCSimIO/SaveAllSecondaryTruthTrees", this);
+  gSaveAllSecondaryTruthTreesCommand->SetGuidance(
+      "Create and fill the AllSecondaries and AllSecondaryPhotons truth TTrees.");
+  gSaveAllSecondaryTruthTreesCommand->SetParameterName(
+      "SaveAllSecondaryTruthTrees", false);
+  gSaveAllSecondaryTruthTreesCommand->SetDefaultValue(true);
+  gSaveAllSecondaryTruthTreesCommand->AvailableForStates(G4State_PreInit, G4State_Idle);
 }
 
 WCSimRunActionMessenger::~WCSimRunActionMessenger()
@@ -48,11 +67,23 @@ WCSimRunActionMessenger::~WCSimRunActionMessenger()
   delete RootFile;
   delete RooTracker;
   delete UseTimer;
+  delete gSaveAllSecondaryTruthTreesCommand;
+  gSaveAllSecondaryTruthTreesCommand = nullptr;
   delete WCSimIODir;
 }
 
 void WCSimRunActionMessenger::SetNewValue(G4UIcommand* command,G4String newValue)
 {
+
+  if (command == gSaveAllSecondaryTruthTreesCommand)
+    {
+      gSaveAllSecondaryTruthTrees =
+          gSaveAllSecondaryTruthTreesCommand->GetNewBoolValue(newValue);
+      G4cout << "AllSecondaries/AllSecondaryPhotons truth TTrees "
+             << (gSaveAllSecondaryTruthTrees ? "ENABLED" : "DISABLED")
+             << G4endl;
+      return;
+    }
 
   if ( command == RootFile)
     {
@@ -74,8 +105,10 @@ void WCSimRunActionMessenger::SetNewValue(G4UIcommand* command,G4String newValue
 
   if ( command == RooTracker)
     {
-      WCSimRun->SetSaveRooTracker(RooTracker->GetNewBoolValue(newValue));
-      if(newValue) G4cout << "Saving NEUT RooTracker information to output file"  << G4endl;
+      const G4bool saveRooTracker = RooTracker->GetNewBoolValue(newValue);
+      WCSimRun->SetSaveRooTracker(saveRooTracker);
+      G4cout << "NEUT RooTracker output "
+             << (saveRooTracker ? "ENABLED" : "DISABLED") << G4endl;
     }
   else if(command == UseTimer)
     {

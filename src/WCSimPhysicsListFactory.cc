@@ -14,7 +14,17 @@
 
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
+#include "G4StepLimiterPhysics.hh"
+#include "G4UserLimits.hh"
 
+//JR EDIT BEGIN
+#include "G4StepLimiter.hh"
+#include "G4PhysicsListHelper.hh"
+#include "G4Electron.hh"
+#include "G4Positron.hh"
+#include "G4MuonMinus.hh"
+#include "G4MuonPlus.hh"
+//JR EDIT END
 /* This code draws upon examples/extended/fields/field04 for inspiration */
 
 
@@ -59,6 +69,18 @@ void WCSimPhysicsListFactory::ConstructParticle()
 
 void WCSimPhysicsListFactory::ConstructProcess() {
     G4VModularPhysicsList::ConstructProcess();
+    
+    //JR BEGIN EDIT
+    // Attach step limiter directly so volume G4UserLimits max-step is honored
+    // (StepLimiterPhysics registration was not being constructed in time)
+    G4PhysicsListHelper* ph = G4PhysicsListHelper::GetPhysicsListHelper();
+    ph->RegisterProcess(new G4StepLimiter(), G4Electron::Electron());
+    ph->RegisterProcess(new G4StepLimiter(), G4Positron::Positron());
+    ph->RegisterProcess(new G4StepLimiter(), G4MuonMinus::MuonMinus());
+    ph->RegisterProcess(new G4StepLimiter(), G4MuonPlus::MuonPlus());
+    G4cout << ">>> JR STEPLIMITER attached to e-/e+/mu-/mu+ <<<" << G4endl;
+    //JR END EDIT
+    
     if (nCaptModelChoice.compareTo("Default", G4String::ignoreCase) == 0) return;
     G4ProcessTable *table = G4ProcessTable::GetProcessTable();
     G4ProcessManager *manager = G4Neutron::Neutron()->GetProcessManager();
@@ -149,6 +171,13 @@ void WCSimPhysicsListFactory::InitializeList(){
       G4cout << "RegisterPhysics: " << elem->GetPhysicsName() << G4endl;
       RegisterPhysics(elem);
     }
+
+    //JR EDIT BEGIN
+    //G4cout << "RegisterPhysics: StepLimiterPhysics" << G4endl;
+//RegisterPhysics(new G4StepLimiterPhysics());
+
+    //JR EDIT END
+
     G4cout << "RegisterPhysics: OpticalPhysics" << G4endl;
     RegisterPhysics(fOpticalPhysics);
     fOpticalPhysics->SetWLSTimeProfile("exponential");

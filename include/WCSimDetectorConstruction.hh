@@ -49,6 +49,16 @@ void ComputeWCODPMT(const G4int NPMT, G4long& NPMTHorizontal, G4long& NPMTVertic
 
 class WCSimDetectorConstruction : public G4VUserDetectorConstruction
 {
+
+//JR EDIT
+  public:
+  void SetWaterOnly(bool v) { waterOnly = v; }
+  private:
+  bool waterOnly = false;
+  //END JR EDIT
+
+
+
 public:
 
   WCSimDetectorConstruction(G4int DetConfig,WCSimTuningParameters* WCSimTuningPars);
@@ -104,6 +114,7 @@ public:
   G4bool IsBGOGeometrySet() const { return placeBGOGeometry; } // Diego Costas, 26/02/2024
   void SetPositionBGOGeometry(G4double X, G4double Y, G4double Z) { BGOX=X, BGOY=Y, BGOZ=Z; } // Diego Costas, 18/07/2024
   
+
   /**
      Dump the values of many variables used to define geometries including
      - radii, heights, name, etc. of the detector
@@ -565,8 +576,16 @@ private:
   // for WCTE mPMT construction
   G4LogicalVolume* ConstructExSituPMT(G4String,G4String,G4String detectorElement="tank");
   G4LogicalVolume* ConstructExSituMultiPMT(G4String,G4String,G4String detectorElement="tank");
+  
+  G4LogicalVolume* BuildInSituMultiPMT_Impl(G4String PMTName,
+                                          G4String CollectionName,
+                                          G4String detectorElement,
+                                          G4bool useAirGap);
   G4LogicalVolume* ConstructInSituPMT(G4String,G4String,G4String detectorElement="tank");
-  G4LogicalVolume* ConstructInSituMultiPMT(G4String,G4String,G4String detectorElement="tank");
+  G4LogicalVolume* ConstructInSituMultiPMT_NoGap(G4String,G4String,G4String detectorElement="tank");
+  G4LogicalVolume* ConstructInSituMultiPMT_WithAirGap(G4String,G4String,G4String detectorElement="tank");
+  
+  //G4LogicalVolume* ConstructInSituMultiPMT_AirGap(G4String, G4String, G4String detectorElement="tank");
 
   // for WCTE beam pipe construction
   G4LogicalVolume* ConstructBeamPipe();

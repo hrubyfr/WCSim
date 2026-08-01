@@ -1,11 +1,9 @@
 #include "WCSimRunAction.hh"
 #include "WCSimRunActionMessenger.hh"
-
 #include "G4Run.hh"
 #include "G4UImanager.hh"
 #include "G4VVisManager.hh"
 #include "G4ios.hh"
-
 #include "jhfNtuple.h"
 
 #ifdef REFLEX_DICTIONARY
@@ -21,6 +19,13 @@
 #include "WCSimPmtInfo.hh"
 
 #include <vector>
+#include "TFile.h"
+#include "TDirectory.h"
+
+#include "WCSimAllSecondariesTree.hh"
+#include "WCSimAllSecondaryPhotonsTree.hh"
+
+G4bool WCSimSaveAllSecondaryTruthTrees();
 
 int pawc_[500000];                // Declare the PAWC common
 struct ntupleStruct jhfNtuple;    // global, ToDo: why not use and set the class member?
@@ -114,6 +119,10 @@ void WCSimRunAction::BeginOfRunAction(const G4Run* aRun)
     if (run == 0) {
       TFile *hfile = new TFile(rootname.c_str(), "RECREATE", "WCSim ROOT file");
       hfile->SetCompressionLevel(2);
+      if (WCSimSaveAllSecondaryTruthTrees()) {
+        AllSecondariesTree_Book(hfile);
+        AllSecondaryPhotonsTree_Book(hfile);
+      }
 
       if (wcsimdetector->GetIsNuPrism()) {
 	if (fSettingsInputTree) {
@@ -506,6 +515,11 @@ void WCSimRunAction::EndOfRunAction(const G4Run*)
   //Write the options tree
   G4cout << "EndOfRunAction" << G4endl;
   
+  if (WCSimSaveAllSecondaryTruthTrees()) {
+    AllSecondariesTree_Write();
+    AllSecondaryPhotonsTree_Write();
+  }
+
   // Close the Root file at the end of the run
 
   if(useFlatROOTout) {

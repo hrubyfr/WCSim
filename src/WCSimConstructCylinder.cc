@@ -1,6 +1,8 @@
 //  -*- mode:c++; tab-width:4;  -*-
 #include "WCSimDetectorConstruction.hh"
 
+G4bool WCSimUseCorrectMPMTTypes();
+
 #include "G4Material.hh"
 #include "G4Element.hh"
 #include "G4Box.hh"
@@ -34,7 +36,7 @@
 #else
 #include "G4MultiUnion.hh"
 #endif
-
+#include "WCSimWCPMT.hh"
 #include "WCSimTuningParameters.hh" //jl145
 
 #include "G4SystemOfUnits.hh"
@@ -44,6 +46,21 @@
 #include "G4Trd.hh"
 #include "G4NistManager.hh"
 #include "CADMesh.hh"
+
+#include <set>
+#include <fstream>
+
+
+
+  static const std::set<int> airGapMPMTs = {
+  // TODO: put the *mPMT* copy numbers here (NOT the 19 inner PMT copies)
+// 1,   5,   7,  46,  49,  65,  72,  76,  78,  80,  90,  94,  98, 105
+// Below is all slots that had ANY delamination at all...
+//1,   3,   5,   7,  19,  20,  24,  26,  33,  42,  46,  48,  49,
+ //       55,  57,  65,  72,  76,  78,  80,  88,  90,  92,  94,  97,  98,
+  //     100, 105
+  
+  };
 
 
 //#define WCSIMCONSTRUCTCYLINDER_VERBOSE
@@ -238,6 +255,12 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCylinder()
 						G4Material::GetMaterial(water),
 						"WCBarrel",
 						0,0,0);
+// JR EDIT BEGIN
+// // Force fine steps in the barrel water so MSC deflection is applied along
+  // the track, not dumped at ~1mm step boundaries (knock-on light study)
+  logicWCBarrel->SetUserLimits(new G4UserLimits(0.1*mm));
+  G4cout << ">>> JR STEPLIMIT 0.1mm ON WCBarrel ACTIVE <<<" << G4endl;
+  // JR EDIT END
 
   //G4VPhysicalVolume* physiWCBarrel = 
     new G4PVPlacement(0,
@@ -3240,7 +3263,14 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCylinderNoReplica()
   }
 
   G4LogicalVolume* logicWCExSituMPMT = ConstructExSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
-  G4LogicalVolume* logicWCInSituMPMT = ConstructInSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
+  //G4LogicalVolume* logicWCInSituMPMT = ConstructInSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
+  G4cout << "🔥 About to construct in-situ mPMTs 🔥" << G4endl;
+  G4LogicalVolume* logicWCInSituMPMT_NoGap  =
+    ConstructInSituMultiPMT_NoGap(WCPMTName, WCIDCollectionName, "tank");
+G4LogicalVolume* logicWCInSituMPMT_AirGap =
+    ConstructInSituMultiPMT_WithAirGap(WCPMTName, WCIDCollectionName, "tank");
+
+  G4cout << "🔥 Finished constructing in-situ mPMTs 🔥" << G4endl;
   G4LogicalVolume* logicBeamPipe = ConstructBeamPipe(); // WCTE beam pipe
   G4LogicalVolume* logicCH = ConstructCameraHousing(); // WCTE camera housing
 
@@ -3248,10 +3278,11 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCylinderNoReplica()
   vlogicWCPMT[0] = logicWCPMT;
   vlogicWCPMT[1] = logicWCPMT2;
   vlogicWCPMT[2] = logicWCExSituMPMT;
-  vlogicWCPMT[3] = logicWCInSituMPMT;
+  vlogicWCPMT[3] = logicWCInSituMPMT_NoGap;
+  //vlogicWCPMT[3] = logicWCInSituMPMT_NoGap;
   vlogicWCPMT[4] = logicBeamPipe;
   vlogicWCPMT[5] = logicCH;
-
+  
   //G4LogicalVolume* logicWCPMT = ConstructPMT(WCPMTName, WCIDCollectionName);
   G4String pmtname = "WCMultiPMT";
 
@@ -3386,23 +3417,89 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCylinderNoReplica()
         PMTPosition.rotateZ(phi_offset);  // align with the symmetry 
                                           //axes of the cell 
 
+        // Choose the type-specific logical volume first.  Validate the table
+        // type before indexing the logical-volume vector.
+        const G4int pmtLogicIndex = pmtType[i] - 1;
+        if (pmtLogicIndex < 0 ||
+            pmtLogicIndex >= static_cast<G4int>(vlogicWCPMT.size()) ||
+            !vlogicWCPMT[pmtLogicIndex]) {
+          G4Exception("ConstructCylinderNoReplica", "INVALID_PMT_TYPE",
+                      FatalException,
+                      "PMT position table contains an invalid or unavailable PMT type.");
+        }
+        G4LogicalVolume* chosenLV = vlogicWCPMT[pmtLogicIndex];
+        const int mpmtCopy = pmtmPMTId[i];
+        if (pmtType[i] == 4 ||
+            (!WCSimUseCorrectMPMTTypes() && pmtType[i] == 3)) {
+   
+    if (airGapMPMTs.count(mpmtCopy)) {
+        chosenLV = logicWCInSituMPMT_AirGap;
+        G4cout << "i = "<<i<<", pmtmPMTId[i] = AIR GAP mPMT copy = " << mpmtCopy << G4endl;
+    } else {
+        chosenLV = logicWCInSituMPMT_NoGap;
+        G4cout << "i = "<<i<<", pmtmPMTId[i] = NO AIR GAP mPMT copy = " << mpmtCopy << G4endl;
+    }
+}
+
+if (!chosenLV) {
+  G4Exception("ConstructCylinderNoReplica", "LV_NULL", FatalException,
+              "Selected PMT logical volume is null.");
+}
+
 #ifdef ACTIVATE_IDPMTS
-        //G4VPhysicalVolume* physiWCBarrelPMT =
-        new G4PVPlacement(PMTRotation,              // its rotation
-              PMTPosition, 
-              vlogicWCPMT[pmtType[i]-1],                // its logical volume
-              pmtType[i]==5 ? "BeamPipe" : pmtname,             // its name
-              !inExtraTower ? logicWCBarrelAnnulus : logicWCExtraTower,         // its mother volume
-              false,                     // no boolean operations
-              pmtmPMTId[i],
-              checkOverlapsPMT);             
+new G4PVPlacement(PMTRotation,
+                  PMTPosition,
+                  chosenLV,  // <-- swapped LV
+                  pmtType[i]==5 ? "BeamPipe" : pmtname,
+                  !inExtraTower ? logicWCBarrelAnnulus : logicWCExtraTower,
+                  false,
+                  pmtmPMTId[i],  // mPMT copy number
+                  checkOverlapsPMT);
+             
+/*
+// --- dump mapping for in-situ mPMTs only (types 3 and 4) ---
+if (pmtType[i] == 3 || pmtType[i] == 4) {
+  std::ofstream csv("wcsim_globalTube_to_mPMTcopy.csv", std::ios::app);
+  if (!csv.is_open()) {
+    G4cerr << "[CSV ERROR] Could not open wcsim_globalTube_to_mPMTcopy.csv" << G4endl;
+  } else {
+    // physMPMT is the multi-PMT assembly ("logicWCMultiPMT" inside)
+    G4LogicalVolume* lvMulti = physMPMT->GetLogicalVolume();
+    // Find the matrix daughter (named "physMatrix" in your recent file)
+    for (int d = 0; d < lvMulti->GetNoDaughters(); ++d) {
+      G4VPhysicalVolume* dau = lvMulti->GetDaughter(d);
+      if (dau && dau->GetName() == "physMatrix") {
+        G4LogicalVolume* lvMatrix = dau->GetLogicalVolume();
+        // The 19 inner PMTs are placed as daughters of the matrix, named "pmt"
+        for (int j = 0; j < lvMatrix->GetNoDaughters(); ++j) {
+          G4VPhysicalVolume* pmtPhys = lvMatrix->GetDaughter(j);
+          if (!pmtPhys) continue;
+          // Get the SD attached to the inner PMT logical volume and query its global tube ID
+          G4VSensitiveDetector* sd = pmtPhys->GetLogicalVolume()->GetSensitiveDetector();
+          // WCSim’s PMT SD class is WCSimWCPMT; dynamic_cast is safe even if sd is null/different
+          class WCSimWCPMT; // forward decl to avoid including headers here
+          auto wcpmt = dynamic_cast<WCSimWCPMT*>(sd);
+          if (wcpmt) {
+            // WCSimWCPMT exposes GetTubeID(G4VPhysicalVolume*)
+            int globalTube = wcpmt->GetTubeID(pmtPhys);
+            int mpmtCopy   = pmtmPMTId[i]; // the mPMT copy number you’re placing here
+            csv << globalTube << "," << mpmtCopy << "\n";
+          }
+        }
+        break; // done after handling the matrix
+      }
+    }
+  }
+}
+*/
+
 #endif                            
         // logicWCPMT->GetDaughter(0),physiCapPMT is the glass face. If you add more 
         // daugter volumes to the PMTs (e.g. a acryl cover) you have to check, if
         // this is still the case.
         copyNo++;
 
-        G4VSolid* solidNode = vlogicWCPMT[pmtType[i]-1]->GetSolid();
+        G4VSolid* solidNode = chosenLV->GetSolid();
         G4Transform3D tr(PMTRotation->inverse(), PMTPosition);
         pmt_solid->AddNode( *solidNode, tr );
       }
@@ -4495,7 +4592,17 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCapsNoReplica(G4bool flipz)
   }
   
   G4LogicalVolume* logicWCExSituMPMT = ConstructExSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
-  G4LogicalVolume* logicWCInSituMPMT = ConstructInSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
+  //G4LogicalVolume* logicWCInSituMPMT = ConstructInSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
+  G4cout << "🔥 About to construct in-situ mPMTs 🔥" << G4endl;
+  G4LogicalVolume* logicWCInSituMPMT_NoGap  =
+    ConstructInSituMultiPMT_NoGap(WCPMTName, WCIDCollectionName, "tank");
+G4LogicalVolume* logicWCInSituMPMT_AirGap =
+    ConstructInSituMultiPMT_WithAirGap(WCPMTName, WCIDCollectionName, "tank");
+
+  //G4LogicalVolume* logicWCInSituMPMT = ConstructInSituMultiPMT(WCPMTName, WCIDCollectionName,"tank");
+  G4cout << "🔥 Finished constructing in-situ mPMTs 🔥" << G4endl;
+
+
   G4LogicalVolume* logicBeamPipe = ConstructBeamPipe(); // WCTE beam pipe
   G4LogicalVolume* logicCH = ConstructCameraHousing(); // WCTE camera housing
 
@@ -4503,7 +4610,8 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCapsNoReplica(G4bool flipz)
   vlogicWCPMT[0] = logicWCPMT;
   vlogicWCPMT[1] = logicWCPMT2;
   vlogicWCPMT[2] = logicWCExSituMPMT;
-  vlogicWCPMT[3] = logicWCInSituMPMT;
+  vlogicWCPMT[3] = logicWCInSituMPMT_NoGap;
+  //vlogicWCPMT[3] = logicWCInSituMPMT;
   vlogicWCPMT[4] = logicBeamPipe;
   vlogicWCPMT[5] = logicCH;
 
@@ -4570,23 +4678,62 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCapsNoReplica(G4bool flipz)
 
         PMTPosition.rotateZ(phi_offset);  // align with the symmetry axes of the cell 
 
+        // Choose the type-specific logical volume first.  Validate the table
+        // type before indexing the logical-volume vector.
+        const G4int pmtLogicIndex = pmtType[i] - 1;
+        if (pmtLogicIndex < 0 ||
+            pmtLogicIndex >= static_cast<G4int>(vlogicWCPMT.size()) ||
+            !vlogicWCPMT[pmtLogicIndex]) {
+          G4Exception("ConstructCylinderNoReplica", "INVALID_PMT_TYPE",
+                      FatalException,
+                      "PMT position table contains an invalid or unavailable PMT type.");
+        }
+        G4LogicalVolume* chosenLV = vlogicWCPMT[pmtLogicIndex];
+        const int mpmtCopy = pmtmPMTId[i];
+        if (pmtType[i] == 4 ||
+            (!WCSimUseCorrectMPMTTypes() && pmtType[i] == 3)) {
+   
+    if (airGapMPMTs.count(mpmtCopy)) {
+        chosenLV = logicWCInSituMPMT_AirGap;
+        G4cout << "[Cap] AIR GAP mPMT copy = " << mpmtCopy << G4endl;
+    } else {
+        chosenLV = logicWCInSituMPMT_NoGap;
+        G4cout << "[Cap] NO GAP mPMT copy = " << mpmtCopy << G4endl;
+    }
+}
+/*
+if (pmtType[i]>1) {
+  G4cout
+         << " Global PMT=" << pmtmPMTId[i]
+         << " mPMT=" << mpmtCopy
+         << " Position=(" << PMTPosition.x() << ", "
+                          << PMTPosition.y() << ", "
+                          << PMTPosition.z() << ")"
+         << G4endl;
+}
+*/
+if (!chosenLV) {
+  G4Exception("ConstructCylinderNoReplica", "LV_NULL", FatalException,
+              "Selected PMT logical volume is null.");
+}
+
 #ifdef ACTIVATE_IDPMTS
-        //G4VPhysicalVolume* physiWCBarrelBorderPMT =
-        new G4PVPlacement(PMTRotation,                      // its rotation
-                PMTPosition,
-                vlogicWCPMT[pmtType[i]-1],                // its logical volume
-                pmtType[i]==6 ? "CameraHousing" : pmtname, // its name
-                logicCapAssembly,         // its mother volume
-                false,                     // no boolean operations
-                pmtmPMTId[i],
-                checkOverlapsPMT); 
+new G4PVPlacement(PMTRotation,
+                  PMTPosition,
+                  chosenLV,
+                  pmtType[i]==6 ? "CameraHousing" : pmtname,
+                  logicCapAssembly,
+                  false,
+                  pmtmPMTId[i],
+                  checkOverlapsPMT);
+ 
 #endif
         // logicWCPMT->GetDaughter(0),physiCapPMT is the glass face. If you add more 
         // daugter volumes to the PMTs (e.g. a acryl cover) you have to check, if
         // this is still the case.
         copyNo++;
 
-        G4VSolid* solidNode = vlogicWCPMT[pmtType[i]-1]->GetSolid() ;
+        G4VSolid* solidNode = chosenLV->GetSolid();
         G4Transform3D tr(PMTRotation->inverse(), PMTPosition);
         pmt_solid->AddNode( *solidNode, tr );
       }
@@ -4762,23 +4909,61 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCapsNoReplica(G4bool flipz)
         WCCapPMTRotation->rotateZ(pmtRotaton[i]); 
         G4ThreeVector cellpos = G4ThreeVector(xoffset, yoffset, (-capAssemblyHeight/2.+1*mm+WCBlackSheetThickness)*zflip);
 
+        // Choose the type-specific logical volume first.  Validate the table
+        // type before indexing the logical-volume vector.
+        const G4int pmtLogicIndex = pmtType[i] - 1;
+        if (pmtLogicIndex < 0 ||
+            pmtLogicIndex >= static_cast<G4int>(vlogicWCPMT.size()) ||
+            !vlogicWCPMT[pmtLogicIndex]) {
+          G4Exception("ConstructCylinderNoReplica", "INVALID_PMT_TYPE",
+                      FatalException,
+                      "PMT position table contains an invalid or unavailable PMT type.");
+        }
+        G4LogicalVolume* chosenLV = vlogicWCPMT[pmtLogicIndex];
+        const int mpmtCopy = pmtmPMTId[i];
+        if (pmtType[i] == 4 ||
+            (!WCSimUseCorrectMPMTTypes() && pmtType[i] == 3)) {
+    
+    if (airGapMPMTs.count(mpmtCopy)) {
+        chosenLV = logicWCInSituMPMT_AirGap;
+        G4cout << "[CapInterior] AIR GAP mPMT copy = " << mpmtCopy << G4endl;
+    } else {
+        chosenLV = logicWCInSituMPMT_NoGap;
+        G4cout << "[CapInterior] NO GAP mPMT copy = " << mpmtCopy << G4endl;
+    }
+}
+/*
+if (pmtType[i] >1) {
+  G4cout << " Global PMT=" << pmtmPMTId[i]
+         << " mPMT=" << mpmtCopy
+         << " Position=(" << pmtPos[i].x() << ", "
+                          << pmtPos[i].y() << ", "
+                          << pmtPos[i].z() << ")"
+         << G4endl;
+}
+*/
+if (!chosenLV) {
+  G4Exception("ConstructCylinderNoReplica", "LV_NULL", FatalException,
+              "Selected PMT logical volume is null.");
+}
+
 #ifdef ACTIVATE_IDPMTS
-        //G4VPhysicalVolume* physiCapPMT =
-        new G4PVPlacement(WCCapPMTRotation,
-                cellpos,                   // its position
-                vlogicWCPMT[pmtType[i]-1],                // its logical volume
-                pmtname, // its name 
-                logicCapAssembly,         // its mother volume
-                false,                 // no boolean os
-                pmtmPMTId[i],               // every PMT need a unique id.
-                checkOverlapsPMT);
+new G4PVPlacement(WCCapPMTRotation,
+                  cellpos,
+                  chosenLV,
+                  pmtname,
+                  logicCapAssembly,
+                  false,
+                  pmtmPMTId[i],
+                  checkOverlapsPMT);
+
 #endif          
         // logicWCPMT->GetDaughter(0),physiCapPMT is the glass face. If you add more 
         // daugter volumes to the PMTs (e.g. a acryl cover) you have to check, if
         // this is still the case.
         icopy++;
 
-        G4VSolid* solidNode = vlogicWCPMT[pmtType[i]-1]->GetSolid() ;
+        G4VSolid* solidNode = chosenLV->GetSolid();
         G4Transform3D tr(WCCapPMTRotation->inverse(), cellpos);
         pmt_solid->AddNode( *solidNode, tr );
       }

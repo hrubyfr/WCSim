@@ -54,7 +54,8 @@
 
 #include "G4ParticleDefinition.hh"
 #include "G4ProcessManager.hh"
-
+#include "G4PhysicalConstants.hh"
+#include "G4SystemOfUnits.hh"
 #include "G4Version.hh"
 
 // factory
@@ -82,6 +83,7 @@ WCSimOpticalPhysics::WCSimOpticalPhysics(G4int verbose, const G4String& name)
     fScintillationTrackInfo(false),
     fScintillationStackPhotons(true),
     fScintillationVerbosity(0),
+   // fMaxNumPhotons(5), //JR EDIT
     fMaxNumPhotons(100),
     fMaxBetaChange(10.0),
     fCerenkovStackPhotons(true),
@@ -231,6 +233,24 @@ void WCSimOpticalPhysics::ConstructProcess()
   OpProcesses[kScintillation] = fScintillationProcess;
 
   fCerenkovProcess = new G4Cerenkov();
+  
+  // ---- JR DEBUG: restrict Cherenkov wavelength band ----
+// Choose a narrow wavelength band [wl_min, wl_max] in nm:
+const G4double wl_min = 350.0 * nm;  // shortest wavelength (highest energy)
+const G4double wl_max = 360.0 * nm;  // longest wavelength (lowest energy)
+
+// Convert to photon energy bounds.
+// NOTE: Emin corresponds to wl_max; Emax corresponds to wl_min.
+const G4double Emin = (h_Planck * c_light) / wl_max;
+const G4double Emax = (h_Planck * c_light) / wl_min;
+
+//fCerenkovProcess->SetMinPhotonEnergy(Emin);
+//fCerenkovProcess->SetMaxPhotonEnergy(Emax);
+
+// Optional sanity print (comment out later)
+// G4cout << "JR: Cherenkov band " << wl_min/nm << "–" << wl_max/nm
+//        << " nm => Emin=" << Emin/eV << " eV, Emax=" << Emax/eV << " eV" << G4endl;
+  
   fCerenkovProcess->SetMaxNumPhotonsPerStep(fMaxNumPhotons);
   fCerenkovProcess->SetMaxBetaChangePerStep(fMaxBetaChange);
   fCerenkovProcess->SetTrackSecondariesFirst(fProcessTrackSecondariesFirst[kCerenkov]);

@@ -568,7 +568,12 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructRealisticPlacement()
       InnerDetectorLogic,
       InnerDetectorPhysical
     );
+    //BEGIN JR EDIT
+    // Force fine steps in the ID water so MSC deflection is applied along the
+    // track rather than dumped at ~1mm step boundaries (knock-on light direction study)
+    InnerDetectorLogic->SetUserLimits(new G4UserLimits(0.1*mm));
 
+//END JR EDIT
     // Optional inner phantom for creating a new logical away from the PMT tracking one
     // Currently the entire ID is treated as one volume. This slows tracking down
     // as every PMT needs to be intersection checked even when rays are far from the tank

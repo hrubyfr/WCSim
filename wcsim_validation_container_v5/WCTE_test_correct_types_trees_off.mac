@@ -1,0 +1,162 @@
+# AUTOMATED WCSim acceptance test
+# UseCorrectMPMTTypes=true
+# SaveAllSecondaryTruthTrees=false
+# Expected output=wcsim_test_correct_types_trees_off.root
+# nuPRISMBeamTest WCTE macro with no visualization
+/control/verbose 1
+/run/verbose 1
+/tracking/verbose 0
+/hits/verbose 0
+
+###############
+# GEOMETRY
+###############
+/WCSim/WCgeom nuPRISMBeamTest_16cShort_mPMT ## this is 16c4r from CAD
+/WCSim/PMT/ReplicaPlacement false
+/WCSim/Geometry/SetCDSFile /opt/WCSim/data/Arm_for_Simulation_ASCII_V2.stl
+/WCSim/PMT/PositionFile /opt/WCSim/data/mPMT_Position_WCTE_CDS.txt
+
+# true: honor type-3 ex-situ and type-4 in-situ assignments from the position table
+# false: force all standard type-3/type-4 mPMT slots to in-situ geometry
+/WCSim/PMT/UseCorrectMPMTTypes true
+
+/WCSim/tuning/rayff 2.0
+/WCSim/tuning/abwff 0.2
+
+##################
+# AmBe CALIBRATION SOURCE
+##################
+# if you use ambeevt generator
+#/WCSim/BGOPlacement true
+#/WCSim/BGOPosition 0 0 0 m
+
+# Set Gadolinium doping (Gd concentration by mass in percent)
+#/WCSim/DopingConcentration 0.1
+#/WCSim/DopedWater true
+
+/WCSim/Construct
+
+##################
+# MISCELLANEOUS
+##################
+
+#Added for the PMT QE option 08/17/10 (XQ)
+# SensitiveDetector_Only: all the QE are applied at the detector. Good for the low energy running.
+# DoNotApplyQE: Switch off the QE, ie. set it at 100%
+
+/WCSim/PMTQEMethod     SensitiveDetector_Only
+#/WCSim/PMTQEMethod     DoNotApplyQE
+
+#turn on or off the collection efficiency
+/WCSim/PMTCollEff on
+
+# command to choose save neutron capture info
+/WCSim/SaveCapture true
+# command to choose save or not save the pi0 info 07/03/10 (XQ)
+/WCSim/SavePi0 false
+
+##################
+# DIGITISER & TRIGGER
+##################
+#choose the Trigger & Digitizer type (and options)
+/DAQ/Digitizer SKI #Uncomment for original
+#/DAQ/Trigger NDigits
+/DAQ/Trigger NoTrigger #Uncomment for original
+
+#/DAQ/Trigger NDigits
+#/DAQ/TriggerNDigits/PreTriggerWindow  -400
+#/DAQ/TriggerNDigits/PostTriggerWindow 10000   # ns
+
+# how long does the digitizer integrate for (ns)?
+/DAQ/DigitizerOpt/IntegrationWindow 144
+#The timing resolution for the digitizer (in ns)
+/DAQ/DigitizerOpt/TimingPrecision 0.1
+
+# setseed - option to change seeds
+/WCSim/random/seed 20250718
+
+##################
+# DARK NOISE
+##################
+/DarkRate/SetDetectorElement tank
+#/DarkRate/SetDarkRate 0 kHz   #Turn dark noise off
+/DarkRate/SetDarkRate 0 kHz
+
+# Select which time window(s) to add dark noise to
+#/DarkRate/SetDarkMode 0 to add dark noise to a time window starting at
+#/DarkRate/SetDarkLow to /DarkRate/SetDarkHigh [time in ns]
+#/DarkRate/SetDarkMode 1 adds dark noise hits to a window of
+#width /DarkRate/SetDarkWindow [time in ns] around each hit
+#i.e. hit time ± (/DarkRate/SetDarkWindow) / 2
+/DarkRate/SetDarkMode 1
+/DarkRate/SetDarkWindow 4000
+
+######################
+# Particle generation
+######################
+# beam particle generation
+/mygen/generator gps
+# Particle type and KE
+/gps/particle mu-
+/gps/energy 300 MeV
+# beam pipe position and direction
+/gps/direction 0 0 1
+#/gps/position 0 -42.47625 -153.7963 cm
+#/gps/position 0 -42.47625 -135 cm
+#/gps/position 0 0 -135 cm
+/gps/position 0 0 0 cm
+#/gps/position 0 -42.47625 -134.8 cm
+
+#Disable proton scattering
+#/process/inactivate protonInelastic
+#/process/inactivate hadElastic
+
+#Disable pi+ scattering
+#/process/inactivate hadElastic
+#/process/inactivate pi+Inelastic
+
+#Disable pi- scattering
+#/process/inactivate hadElastic
+#/process/inactivate pi-Inelastic
+
+#Disable electromagnetic showers
+#/process/inactivate eBrem e-
+#/process/inactivate msc
+#/run/setCutForAGivenParticle e- 100 cm
+#/process/inactivate eIoni
+
+# Disable multiple scattering for muons
+#/process/inactivate msc mu-
+#/process/inactivate msc mu+
+
+#Disable k+ scattering
+#/process/inactivate hadElastic
+#/process/inactivate kaon+Inelastic
+
+#Disable photon scattering
+#/process/inactivate OpRayleigh
+#/process/inactivate OpMieHG
+#/process/inactivate OpRaman
+
+#Disable photon absorption
+#/process/inactivate OpAbsorption
+
+
+
+
+#Cherenkov light range
+#/WCSim/Physics/SetCherenkovMinWavelength 350
+#/WCSim/Physics/SetCherenkovMaxWavelength 360
+##################
+# OUTPUT
+##################
+## change the name of the output root file, default = wcsim.root
+# Write the retained custom truth trees: AllSecondaries and AllSecondaryPhotons
+/WCSimIO/SaveAllSecondaryTruthTrees false
+
+/WCSimIO/RootFile wcsim_test_correct_types_trees_off.root
+
+
+/run/beamOn 10
+#exit
+

@@ -23,7 +23,7 @@
 
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
-
+#include "G4UserLimits.hh"
 #include <tuple>
 #include <algorithm>
 
@@ -315,6 +315,42 @@ G4VPhysicalVolume* WCSimDetectorConstruction::Construct()
   totalNum_mPMTs = 0;
   totalNum_mPMTs2 = 0;
 
+
+    // =====================================================
+  // JR: Water-only geometry (world is pure water; no detector volumes)
+  // =====================================================
+  const bool waterOnly = false;  // <-- set to false to restore normal geometry
+
+  if (waterOnly) {
+
+    // Ensure materials exist (ConstructMaterials() was called in the constructor)
+    G4Material* water = G4Material::GetMaterial("Water");
+    if (!water) {
+      // Some builds use NIST name instead; try that as fallback
+      water = G4Material::GetMaterial("G4_WATER");
+    }
+    if (!water) {
+      G4cerr << "ERROR: Could not find Water material (tried 'Water' and 'G4_WATER')." << G4endl;
+      return nullptr;
+    }
+
+    // Choose a big box of water (adjust if you like)
+    const G4double halfSize = 50.0*m;   // 100 m cube of water
+
+    G4Box* solidWorld = new G4Box("World", halfSize, halfSize, halfSize);
+    G4LogicalVolume* logicWorld = new G4LogicalVolume(solidWorld, water, "World");
+
+    // Place it at the origin
+    G4VPhysicalVolume* physWorld =
+      new G4PVPlacement(nullptr, G4ThreeVector(), logicWorld,
+                        "World", nullptr, false, 0, true);
+
+    G4cout << "WCSimDetectorConstruction: built WATER-ONLY world volume (no detector)." << G4endl;
+    return physWorld;
+  }
+
+
+
   //-----------------------------------------------------
   // Create Logical Volumes
   //-----------------------------------------------------
@@ -336,6 +372,14 @@ G4VPhysicalVolume* WCSimDetectorConstruction::Construct()
     G4cerr << "Something went wrong in ConstructCylinder" << G4endl;
     return NULL;
   }
+
+  //JR EDIT BEGIN
+  // Hard max step length inside the WC mother volume
+logicWCBox->SetUserLimits(new G4UserLimits(0.1*mm));
+
+  //JR EDIT END
+
+
   G4cout << " WCLength       = " << WCLength/m << " m"<< G4endl;
 
   //-------------------------------
@@ -653,6 +697,9 @@ void WCSimDetectorConstruction::CreateCombinedPMTQE(const std::vector<G4String> 
   newPMT->DefineQEHist(QE);
   SetBasicPMTObject(newPMT);
 }
+
+
+
 
 WCSimWLSProperties *WCSimDetectorConstruction::CreateWLSObject(G4String WLSType){
 

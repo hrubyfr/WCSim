@@ -1,0 +1,28 @@
+/control/alias particle      mu-
+/control/alias nEvents       100
+
+/control/alias E             300
+/control/alias Eunit         MeV
+
+/control/alias x0            0
+/control/alias y0            0
+/control/alias z0            -100
+/control/alias zTag          zn100
+/control/alias posUnit       mm
+
+/control/alias dx            0
+/control/alias dy            0
+/control/alias dz            1
+
+/control/alias scatTag       noScat
+/control/alias emTag         noE
+
+/control/alias outdir        /eos/user/j/jrimmer/sim_work_dir/WCSim/data_for_surface
+
+/control/alias energyTag     {E}{Eunit}
+/control/alias posTag        x{x0}y{y0}{zTag}
+/control/alias runTag        {nEvents}{particle}_{energyTag}_{posTag}_{scatTag}_{emTag}
+/control/alias outfile       {runTag}.root
+
+/control/echo Running: {outdir}/{outfile}
+/control/execute /eos/home-j/jrimmer/sim_work_dir/WCSim/WCTE_good.mac

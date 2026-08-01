@@ -1,3 +1,8 @@
+// WCSimConstructInSituMultiPMT.cc  (clean, dual-build version)
+// Builds in-situ mPMT logical volumes either with or without a 0.5 mm air shell
+// directly under the acrylic dome. Gel then extends from the matrix to either
+// the dome inner surface (no gap) or to the inner radius of the air shell (with gap).
+
 #include "WCSimDetectorConstruction.hh"
 
 #include "G4Box.hh"
@@ -18,14 +23,334 @@
 #include "WCSimWCSD.hh"
 
 #include "G4SystemOfUnits.hh"
+#include "WCSimMultiPMTParameterisation.hh"
+#include "G4PVParameterised.hh"
 
-#include  "WCSimMultiPMTParameterisation.hh"
-#include  "G4PVParameterised.hh"
+// Debug file for mapping PMT -> mPMT + tube index
+#include <fstream>
+//static std::ofstream mapFile("wcsim_pmt_mpmts.csv");
 
-// ex-situ mPMT logical volume construction.
-// A function of the WCSimDetectorConstruction class
-// dimensions are measured from actual mPMT construction and hard-coded
+// -----------------------------
+// Local helper (private) builder
+// -----------------------------
+G4LogicalVolume*
+WCSimDetectorConstruction::BuildInSituMultiPMT_Impl(G4String PMTName,
+                                                    G4String CollectionName,
+                                                    G4String detectorElement,
+                                                    G4bool withAirGap)
+{
+  // Unique cache key so we only build each variant once
+  G4String keyname = (withAirGap ? "InSitu-mPMT-AirGap" : "InSitu-mPMT-NoGap");
+  PMTKey_t key(keyname, CollectionName);
+  PMTMap_t::iterator it = PMTLogicalVolumes.find(key);
+  if (it != PMTLogicalVolumes.end()) return it->second;
 
+  // ---- Geometry params (as in your original tree) ----
+  const G4double domeInnerRadius = 332.*mm;
+  const G4double domeOuterRadius = 347.*mm;
+  const G4double domeCut         = 235.*mm;
+
+  const G4double vessel_cylinder_height = 77.785*2*mm;
+  const G4double vessel_inner_radius    = 250.93*mm;
+  const G4double vessel_outer_radius    = 254.*mm;
+
+  // Matrix (inner shell where PMTs live)
+  const G4double matrixRmin   = 263.003*mm;
+  const G4double matrixRmax   = 325.603*mm;
+  const G4double matrixUpshift= 5.7*mm;
+
+  // Gel defaults (no gap: gel touches dome)
+  const G4double gelRmin = 323.5*mm;
+
+  // Air gap thickness when enabled
+  const G4double kAirGapThickness = 0.5 * mm;
+  const G4double gelRmax_noGap    = domeInnerRadius;
+  const G4double gelRmax_withGap  = domeInnerRadius - kAirGapThickness;
+
+  // --- BEGIN debug guards ---
+G4cout << "[INSITU] BuildInSituMultiPMT_Impl start. withAirGap=" << (withAirGap?"yes":"no") << G4endl;
+G4cout << "[INSITU] domeInnerRadius=" << domeInnerRadius/mm << " mm, domeOuterRadius=" << domeOuterRadius/mm
+       << " mm, gelRmin=" << gelRmin/mm << " mm" << G4endl;
+
+// Air gap thickness you intend
+const G4double airGap = 0.5*mm;
+
+if (withAirGap) {
+  if (gelRmin + airGap >= domeInnerRadius) {
+    G4Exception("BuildInSituMultiPMT_Impl","WCTE001",FatalException,
+                ("Invalid radii: gelRmin+airGap >= domeInnerRadius (" +
+                 std::to_string((gelRmin+airGap)/mm) + " vs " +
+                 std::to_string(domeInnerRadius/mm) + " mm)").c_str());
+  }
+}
+// --- END debug guards ---
+
+
+  // --------------------------------------------
+  // 1) Outer vessel logical (air-filled mother)
+  // --------------------------------------------
+  G4double zRange[2] = {0., vessel_cylinder_height};
+  G4double Rmax[2]   = {vessel_outer_radius, vessel_outer_radius};
+  G4double Rmin[2]   = {0., 0.};
+
+  G4Polycone* solidVesselCyl = new G4Polycone("WCmPMT_vessel",
+                                              0.*deg, 360.*deg,
+                                              2, zRange, Rmin, Rmax);
+
+  G4Sphere* solidTopSphere = new G4Sphere("WCmPMT_tsphere",
+                                          0., domeOuterRadius,
+                                          0.*deg, 360.*deg,
+                                          0.*deg, 90.*deg);
+
+  G4Box* solidCut = new G4Box("cutOffTubs",
+                              domeOuterRadius + 1.*cm,
+                              domeOuterRadius + 1.*cm,
+                              domeCut);
+
+  G4SubtractionSolid* solidTopCap =
+      new G4SubtractionSolid("WCmPMT_tsphere_cap",
+                             solidTopSphere, solidCut);
+
+  G4UnionSolid* solidMultiPMT =
+      new G4UnionSolid("WCmPMT_solid", solidVesselCyl, solidTopCap,
+                       0, G4ThreeVector(0,0,vessel_cylinder_height - domeCut));
+
+  G4LogicalVolume* logicWCMultiPMT =
+      new G4LogicalVolume(solidMultiPMT,
+                          G4Material::GetMaterial("Air1"),
+                          withAirGap ? "WCMultiPMT_AirGap" : "WCMultiPMT_NoGap");
+
+  // --------------------------------------------
+  // 2) Acrylic dome
+  // --------------------------------------------
+  G4Sphere* domeSphere = new G4Sphere("DomeSphere",
+                                      domeInnerRadius, domeOuterRadius,
+                                      0.*deg, 360.*deg,
+                                      0.*deg, 90.*deg);
+
+  G4VSolid* domeSolid =
+      new G4SubtractionSolid("domeSolid", domeSphere, solidCut);
+
+  G4LogicalVolume* domeLogic =
+      new G4LogicalVolume(domeSolid,
+                          G4Material::GetMaterial("G4_PLEXIGLASS"),
+                          "logicDome");
+
+  new G4PVPlacement(0,
+                    G4ThreeVector(0,0,vessel_cylinder_height - domeCut),
+                    domeLogic, "physInsituDome",
+                    logicWCMultiPMT, false, 0, checkOverlaps);
+
+  { // visuals
+    G4VisAttributes *domeAttr = new G4VisAttributes(G4Colour(1.0,1.0,1.0,0.4));
+    domeAttr->SetForceSolid(true);
+    domeLogic->SetVisAttributes(domeAttr);
+  }
+
+  // --------------------------------------------
+  // 3) Cylinder wall
+  // --------------------------------------------
+  G4Tubs* cylinderSolid =
+      new G4Tubs("cylinderSolid",
+                 vessel_inner_radius, vessel_outer_radius,
+                 vessel_cylinder_height/2., 0.*deg, 360.*deg);
+
+  G4LogicalVolume* logicCylinder =
+      new G4LogicalVolume(cylinderSolid,
+                          G4Material::GetMaterial("Plastic"),
+                          "logicCylinder");
+
+  new G4PVPlacement(0,
+                    G4ThreeVector(0,0,vessel_cylinder_height/2.),
+                    logicCylinder, "physInsituCylinder",
+                    logicWCMultiPMT, false, 0, checkOverlaps);
+
+  new G4LogicalSkinSurface("cylinderSkinSurface", logicCylinder, BSSkinSurface);
+  { G4VisAttributes *cylA = new G4VisAttributes(G4Colour(0.2,0.2,0.2,1.0));
+    cylA->SetForceSolid(true); logicCylinder->SetVisAttributes(cylA); }
+
+  // --------------------------------------------
+  // 4) Matrix (inner shell where PMTs are placed)
+  // --------------------------------------------
+  G4Sphere* solidMatrix =
+      new G4Sphere("solidMatrix",
+                   matrixRmin, matrixRmax,
+                   0.*deg, 360.*deg, 0.*deg, 43.4549*deg);
+
+  G4LogicalVolume* logicMatrix =
+      new G4LogicalVolume(solidMatrix,
+                          G4Material::GetMaterial("Plastic"),
+                          "logicMatrix");
+  new G4LogicalSkinSurface("matrixSkinSurface", logicMatrix, BSSkinSurface);
+
+  // --------------------------------------------
+  // 5) Optional 0.5 mm air shell directly under dome
+  //    and gel that fills up to the correct boundary.
+  // --------------------------------------------
+  const G4double gelRmax = withAirGap ? gelRmax_withGap : gelRmax_noGap;
+
+  if (withAirGap) {
+    // Air shell: (domeInnerRadius - 0.5mm) -> domeInnerRadius
+    G4Sphere* airShell =
+        new G4Sphere("AirGapSphere",
+                     gelRmax, domeInnerRadius,
+                     0.*deg, 360.*deg, 0.*deg, 90.*deg);
+
+    G4LogicalVolume* logicAirGap =
+        new G4LogicalVolume(airShell,
+                            G4Material::GetMaterial("Air1"),
+                            "logicAirGap");
+
+    new G4PVPlacement(0,
+                      G4ThreeVector(0,0,vessel_cylinder_height - domeCut),
+                      logicAirGap, "AirGap",
+                      logicWCMultiPMT, false, 0, checkOverlaps);
+
+    G4VisAttributes* airVis = new G4VisAttributes(G4Colour(0.0,1.0,1.0,0.25));
+    airVis->SetForceSolid(true);
+    logicAirGap->SetVisAttributes(airVis);
+  }
+
+  // Gel: fill from matrix up to gelRmax (touches dome or inner air shell)
+  G4Sphere *solidGelSphere =
+      new G4Sphere("solidGelSphere",
+                   gelRmin, gelRmax,
+                   0.*deg, 360.*deg, 0.*deg, 90.*deg);
+
+  // cut off back
+  //G4Box *solidGelCutOut =
+    //  new G4Box("BoxGelCutOut",
+      //          domeInnerRadius+1.*cm, domeInnerRadius+1.*cm, 241.04*mm);
+
+  //G4VSolid *solidGelSphereCut =
+    //  new G4SubtractionSolid("solidGelSphereCut",
+      //                       solidGelSphere, solidGelCutOut);
+
+G4VSolid *solidGelSphereCut =
+    new G4SubtractionSolid("solidGelSphereCut",
+                           solidGelSphere, solidCut);
+
+  // subtract matrix to leave the inter-shell volume
+  G4VSolid *solidGel =
+      new G4SubtractionSolid("solidGel",
+                             solidGelSphereCut, solidMatrix,
+                             0, G4ThreeVector(0,0,gelRmin - matrixRmax + matrixUpshift));
+
+  G4LogicalVolume *logicGel =
+      new G4LogicalVolume(solidGel,
+                          G4Material::GetMaterial("SilGel_WCTE"),
+                          "logicGel");
+
+  new G4PVPlacement(0,
+                    G4ThreeVector(0,0,vessel_cylinder_height - domeCut),
+                    logicGel, "Gel",
+                    logicWCMultiPMT, false, 0, checkOverlaps);
+
+  { G4VisAttributes *gelA = new G4VisAttributes(G4Colour(1.0,1.0,1.0,0.35));
+    gelA->SetForceSolid(true); logicGel->SetVisAttributes(gelA); }
+
+  // --------------------------------------------
+  // 6) Blacksheet disk seal at bottom
+  // --------------------------------------------
+  G4Tubs *solidBS = new G4Tubs("solidBS", 0.*mm, vessel_inner_radius, 1.*mm, 0.*deg, 360.*deg);
+  G4LogicalVolume *logicBS = new G4LogicalVolume(solidBS,
+                                                 G4Material::GetMaterial("Blacksheet"),
+                                                 "logicBS");
+
+  new G4PVPlacement(0, G4ThreeVector(0,0,1.*mm),
+                    logicBS, "physInsituMPMTBS",
+                    logicWCMultiPMT, false, 0, checkOverlaps);
+  new G4LogicalSkinSurface("insituMPMTBSSkinSurface", logicBS, BSSkinSurface);
+  { G4VisAttributes* bsA = new G4VisAttributes(G4Colour(1.0,0.0,0.0,1.0));
+    bsA->SetForceSolid(true); logicBS->SetVisAttributes(bsA); }
+
+  // --------------------------------------------
+  // 7) Build the internal 3-inch PMT logic and place 19 PMTs on the matrix
+  // --------------------------------------------
+  G4LogicalVolume* logicWCPMT = ConstructInSituPMT(PMTName, CollectionName, detectorElement);
+
+  const G4int nIDPMTs = 19;
+  G4double thetaArray[19] =  {0.*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg,
+                              35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg,
+                              35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg };
+  G4double phiArray[19]   =  {0.*deg, 0.*deg, 60.*deg, 120.*deg, 180.*deg, -120.*deg, -60.*deg,
+                              0.*deg, 30.*deg, 60.*deg, 90.*deg, 120.*deg, 150.*deg, 180.*deg,
+                              -150.*deg, -120.*deg, -90.*deg, -60.*deg, -30.*deg};
+/*
+  for (int i = 0; i < nIDPMTs; ++i) {
+    G4RotationMatrix* rot = new G4RotationMatrix;
+    rot->rotateZ(-phiArray[i]);
+    rot->rotateY(-thetaArray[i]);
+
+    new G4PVPlacement(rot, G4ThreeVector(0,0,0),
+                      logicWCPMT, "pmt",
+                      logicMatrix, false, i, checkOverlaps);
+  }
+*/
+
+  for (int tubeIndex = 0; tubeIndex < nIDPMTs; ++tubeIndex) {
+    G4RotationMatrix* rot = new G4RotationMatrix;
+    rot->rotateZ(-phiArray[tubeIndex]);
+    rot->rotateY(-thetaArray[tubeIndex]);
+
+    G4PVPlacement* physPMT = new G4PVPlacement(
+        rot, G4ThreeVector(0,0,0),
+        logicWCPMT, "pmt",
+        logicMatrix, false, tubeIndex, checkOverlaps
+    );
+
+    // Get mPMT instance copy number
+//    G4int mPMTcopy = physPMT->GetMotherLogical()->GetDaughter(0)->GetCopyNo();
+
+    // After creating each of the 19 sub-PMTs:
+  //  G4int parentCopyNo = logicMatrix->GetCopyNo(); // mPMT copy number
+/*
+std::ofstream csvOut("/eos/home-j/jrimmer/sim_work_dir/WCSim/build/wcsim_pmt_mpmts.csv", std::ios::app);
+if (csvOut.is_open()) {
+    csvOut << parentCopyNo << "," << i << "\n";
+    csvOut.close();
+} else {
+    G4cerr << "[CSV ERROR] Could not open wcsim_pmt_mpmts.csv for writing" << G4endl;
+}
+*/
+}
+
+
+  // Place the matrix last
+  new G4PVPlacement(0,
+                    G4ThreeVector(0,0, vessel_cylinder_height - domeCut + gelRmin - matrixRmax + matrixUpshift),
+                    logicMatrix, "physMatrix",
+                    logicWCMultiPMT, false, 0, checkOverlaps);
+
+  // visuals on mother
+  { G4VisAttributes* VisAttGrey = new G4VisAttributes(G4Colour(0.2,0.2,0.2,1.0));
+    VisAttGrey->SetForceSolid(true); logicWCMultiPMT->SetVisAttributes(VisAttGrey); }
+
+  // Cache and return
+  PMTLogicalVolumes[key] = logicWCMultiPMT;
+  return logicWCMultiPMT;
+}
+
+// -----------------------------
+// Public variants (call these)
+// -----------------------------
+G4LogicalVolume*
+WCSimDetectorConstruction::ConstructInSituMultiPMT_NoGap(G4String PMTName,
+                                                         G4String CollectionName,
+                                                         G4String detectorElement)
+{
+  return BuildInSituMultiPMT_Impl(PMTName, CollectionName, detectorElement, false);
+}
+
+G4LogicalVolume*
+WCSimDetectorConstruction::ConstructInSituMultiPMT_WithAirGap(G4String PMTName,
+                                                              G4String CollectionName,
+                                                              G4String detectorElement)
+{
+  return BuildInSituMultiPMT_Impl(PMTName, CollectionName, detectorElement, true);
+}
+
+// This is the original PMT constructor code
 // 3-inch PMT construction
 G4LogicalVolume* WCSimDetectorConstruction::ConstructInSituPMT(G4String PMTName, G4String CollectionName, G4String detectorElement)
 {
@@ -382,309 +707,3 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructInSituPMT(G4String PMTName,
   return logicWCPMT;
 }
 
-// mPMT construction
-G4LogicalVolume* WCSimDetectorConstruction::ConstructInSituMultiPMT(G4String PMTName, G4String CollectionName, G4String detectorElement)
-{
-
-  G4bool showme = true;
-
-  //unique key for mPMT object. 
-  G4String keyname =  mPMT_ID_PMT + "_InSitu-mPMT";
-  PMTKey_t key(keyname,CollectionName);
-  
-  // Return pre-created mPMT Logical Volume if it already exists.
-  PMTMap_t::iterator it = PMTLogicalVolumes.find(key);
-  if (it != PMTLogicalVolumes.end()) {
-    return it->second;
-  }
-
-  G4cout << "========================================================" << G4endl;
-  G4cout<<"In-situ mPMT: Collection Name = "<<CollectionName<<G4endl;
-  G4cout << "========================================================" << G4endl;
-
-  G4double domeInnerRadius = 332.*mm;
-  G4double domeOuterRadius = 347.*mm;
-  G4double domeCut = 235*mm;
-
-  G4double vessel_cylinder_height = 77.785*2*mm;
-  G4double vessel_inner_radius = 250.93*mm;
-  G4double vessel_outer_radius = 254.*mm;
-  G4double dome_height = domeOuterRadius - domeCut;
-
-  // G4double offsetFromBox = 168.97*mm; // offset from original code where world volume is a box
-
-  G4int nIDPMTs = 19;
-  
-  G4cout << "Create ex-situ mPMT" <<  G4endl;
-  G4cout << "Vessel height: " << vessel_cylinder_height << G4endl;
-  G4cout << "Vessel radius: " << vessel_outer_radius << G4endl;
-  G4cout << "Dome radius curv: " << domeOuterRadius << G4endl;
-  G4cout << "Dome height: " << dome_height << G4endl;
-  G4cout << "Number of ID PMTs: " << nIDPMTs << G4endl;
-
-  //All components of the PMT are now contained in a single logical volume logicWCPMT.
-  //Origin is cylinder bottom, faces positive z-direction.
-
-  ////////////////////////////////////////////////////
-  /// 1) Outer logical volume: fill with air     ///
-  ////////////////////////////////////////////////////
-  G4double mPMT_zRange_outer[2] = {0,                         // start from zero for easier placement in ID
-				                           vessel_cylinder_height};
-  G4double mPMT_RRange_outer[2] = {vessel_outer_radius, 
-				                           vessel_outer_radius};
-  G4double mPMT_rRange_outer[2] = {0., 0.};
-
-  // Although G4Tubs is more natural, Polycone is used to be in control of z position
-  // and because z = 0 is position of bottom of cylinder, vs center in G4Tubs
-  G4Polycone* solidMultiPMT_vessel = 
-    new G4Polycone("WCmPMT_vessel",                    
-		   0.0*deg,
-		   360.0*deg,
-		   2,
-		   mPMT_zRange_outer,
-		   mPMT_rRange_outer, // R Inner
-		   mPMT_RRange_outer);// R Outer
-  
-  G4Sphere* mPMT_top_sphere =
-    new G4Sphere(    "WCmPMT_tsphere",
-		     0,
-		     domeOuterRadius,
-		     0.0*deg,360.0*deg,
-		     0.0*deg,90.0*deg);
-  
-  G4Box*  solidCutOffTubs = 
-    new G4Box(    "cutOffTubs",
-      domeOuterRadius + 1.*cm,                      // x/2
-      domeOuterRadius + 1.*cm,                      // y/2
-      domeCut);         // z/2
-
-  G4SubtractionSolid * mPMT_top_cap_vessel = new G4SubtractionSolid("WCmPMT_tsphere_vessel",
-                                                                    mPMT_top_sphere,
-                                                                    solidCutOffTubs);
-
-  G4UnionSolid *solidMultiPMT = 
-	  new G4UnionSolid("WCmPMT",solidMultiPMT_vessel,mPMT_top_cap_vessel,0,G4ThreeVector(0,0,vessel_cylinder_height-domeCut));
-
-  G4LogicalVolume *logicWCMultiPMT =
-    new G4LogicalVolume(    solidMultiPMT,
-			    G4Material::GetMaterial("Air1"), 
-			    "WCMultiPMT",
-			    0,0,0);
-
-
-
-  ////////////////////////////////////////////////
-  /// 2)Top acrylic + shell of the mPMT vessel ///
-  ////////////////////////////////////////////////
-  G4Sphere *domeSphere = 
-  new G4Sphere("DomeSphere",
-                domeInnerRadius,
-                domeOuterRadius,
-                0.0*deg, 360.0*deg,
-                0.0, 90.*deg);
-
-  G4VSolid *domeSolid = new G4SubtractionSolid("domeSolid",
-                                               domeSphere,
-                                               solidCutOffTubs);
-
-  G4LogicalVolume *domeLogic = new G4LogicalVolume(domeSolid,
-                                                   G4Material::GetMaterial("G4_PLEXIGLASS"),
-                                                   "logicDome");
-  
-  new G4PVPlacement(0,
-                    G4ThreeVector(0.,0.,vessel_cylinder_height-domeCut),
-                    domeLogic,
-                    "physInsituDome",
-                    logicWCMultiPMT,
-                    false,
-                    0,
-                    checkOverlaps);
-
-  G4VisAttributes *domeAttributes = new G4VisAttributes();
-  domeAttributes->SetColor(1.0, 1.0, 1.0, 0.5);
-  domeAttributes->SetVisibility(true);
-  domeAttributes->SetForceSolid(true);
-  domeLogic->SetVisAttributes(domeAttributes);
-
-  G4Tubs *cylinderSolid = new G4Tubs("cylinderSolid",
-				     vessel_inner_radius,
-				     vessel_outer_radius,
-				     vessel_cylinder_height/2,
-				     0.*deg, 360.*deg);
-
-  G4LogicalVolume *logicCylinder = new G4LogicalVolume( cylinderSolid,
-                                                        G4Material::GetMaterial("Plastic"),
-                                                        "logicCylinder");
-  
-  new G4PVPlacement(0,
-                    G4ThreeVector(0.,0.,vessel_cylinder_height/2),
-                    logicCylinder,
-                    "physInsituCylinder",
-                    logicWCMultiPMT,
-                    false,
-                    0,
-                    checkOverlaps);
-
-  new G4LogicalSkinSurface("cylinderSkinSurface", logicCylinder, BSSkinSurface); // assume same as blacksheet
-      
-  G4VisAttributes *cylinderAttributes = new G4VisAttributes();  
-  cylinderAttributes->SetColor(0.2, 0.2, 0.2, 1.0);  
-  cylinderAttributes->SetVisibility(true); 
-  cylinderAttributes->SetForceSolid(true);  
-  logicCylinder->SetVisAttributes(cylinderAttributes);
-
-  /////////////////////////////////////////////////////////////////////////
-  /// 3) This is the area between the outer shell and the inner shell.  ///
-  ///    In this space, the PMTs will live.                             ///
-  /////////////////////////////////////////////////////////////////////////
-
-  // Matrix, where PMTs are placed as daughters
-  G4double matrixRmin = 263.003*mm;
-  G4double matrixRmax = 325.603*mm;
-  G4double matrixUpshift = 5.7*mm;
-  G4Sphere *solidMatrix = 
-  new G4Sphere("solidMatrix",
-				       matrixRmin,
-				       matrixRmax,
-				       0.0*deg, 360.0*deg,
-				       0.0, 43.4549*deg);
-  
-
-  G4LogicalVolume *logicMatrix = new G4LogicalVolume( solidMatrix,
-                                                      G4Material::GetMaterial("Plastic"),
-                                                      "logicMatrix");
-  // delay the matrix placement 
-
-  new G4LogicalSkinSurface("matrixSkinSurface", logicMatrix, BSSkinSurface); // assume same as blacksheet
-
-  // Gel
-  G4double gelRmin = 323.5*mm;
-  G4Sphere *solidGelSphere = new G4Sphere("solidGelSphere",
-                                          gelRmin,
-                                          domeInnerRadius,
-                                          0.0*deg, 360.0*deg,
-                                          0.0, 90.0*deg);
-
-  G4Box *solidGelCutOut = new G4Box("BoxGelCutOut",
-                                    domeInnerRadius+1.*cm,
-                                    domeInnerRadius+1.*cm,
-                                    241.04*mm);
-
-  G4VSolid *solidGelSphereCut = 
-  new G4SubtractionSolid("solidGelSphereCut",
-                          solidGelSphere,
-                          solidGelCutOut);
-
-  G4VSolid *solidGel = new G4SubtractionSolid("solidGel",
-                                              solidGelSphereCut,
-                                              solidMatrix,
-                                              0,
-                                              G4ThreeVector(0.,0.,gelRmin-matrixRmax+matrixUpshift));
-
-  G4LogicalVolume *logicGel = new G4LogicalVolume(solidGel,
-                                                  G4Material::GetMaterial("SilGel_WCTE"),
-                                                  "logicGel");
-
-  new G4PVPlacement(0,
-						        G4ThreeVector(0.,0.,vessel_cylinder_height-domeCut),
-                    logicGel,
-                    "Gel",
-                    logicWCMultiPMT,
-                    false,
-                    0,
-                    checkOverlaps);
-
-  G4VisAttributes *gelAttributes = new G4VisAttributes();
-  gelAttributes->SetColor(1.0, 1.0, 1.0, 0.5);
-  gelAttributes->SetVisibility(true);
-  gelAttributes->SetForceSolid(true);
-  logicGel->SetVisAttributes(gelAttributes);
-
-  // Seal the bottom with blacksheet
-  G4Tubs *solidBS = new G4Tubs("solidBS",
-                                0*mm,
-                                vessel_inner_radius,
-                                1.*mm,
-                                0.*deg, 360.*deg);
-
-  G4LogicalVolume *logicBS = new G4LogicalVolume(solidBS,
-						                                     G4Material::GetMaterial("Blacksheet"),
-                                                 "logicBS");
-
-  new G4PVPlacement(0,
-                    G4ThreeVector(0.,0.,1.*mm),
-                    logicBS,
-                    "physInsituMPMTBS",
-                    logicWCMultiPMT,
-                    false,
-                    0,
-                    checkOverlaps);
-
-  new G4LogicalSkinSurface("insituMPMTBSSkinSurface", logicBS, BSSkinSurface); 
-
-  G4VisAttributes* VisAttRed = new G4VisAttributes(G4Colour(1.0,0.,0.));
-  VisAttRed->SetForceSolid(true); 
-  logicBS->SetVisAttributes(VisAttRed);
-
-  /////////////////////////////////////////////////////
-  /// 4) Fill the mPMT matrix with single (ID) PMTs ///
-  /////////////////////////////////////////////////////
-  
-  G4LogicalVolume* logicWCPMT = ConstructInSituPMT(PMTName, CollectionName,detectorElement);
-  
-  G4double thetaArray[19] =  {0.*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 18.1345*deg, 
-                              35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 
-                              35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg, 35.3149*deg };
-  G4double phiArray[19] = {0.*deg, 0.*deg, 60.*deg, 120.*deg, 180.*deg, -120.*deg, -60*deg, 0.*deg, 30.*deg, 60.*deg, 90.*deg, 120.*deg, 150.*deg, 180.*deg, -150.*deg, -120.*deg, -90.*deg, -60.*deg, -30.*deg};
-
-  // Place the PMTs inside matrix
-  for (int i = 0; i < nIDPMTs; i++) {
-
-    G4ThreeVector PMTPosition = {0,0,0};
-
-    G4RotationMatrix* PMTRotation = new G4RotationMatrix;
-    PMTRotation->rotateZ(-phiArray[i]);
-    PMTRotation->rotateY(-thetaArray[i]);
-    
-    // Create and place the PMT copy                                                                                    
-    new G4PVPlacement(PMTRotation,
-                      PMTPosition,
-                      logicWCPMT,
-                      "pmt",
-                      logicMatrix,
-                      false,
-                      i,
-                      checkOverlaps);
-    
-  }  
- 
-  // Finally place the matrix
-  new G4PVPlacement(0,
-                    G4ThreeVector(0.,0., vessel_cylinder_height-domeCut+gelRmin-matrixRmax+matrixUpshift),
-                    logicMatrix,
-                    "physMatrix",
-                    logicWCMultiPMT,
-                    false,
-                    0,
-                    checkOverlaps);  
-
-  /* Set all visualization here for better overview. */
-  // Gray wireframe visual style
-  G4VisAttributes* VisAttGrey = new G4VisAttributes(G4Colour(0.2,0.2,0.2));
-  //VisAttGrey->SetForceWireframe(true);
-  VisAttGrey->SetForceSolid(true); 
-  G4VisAttributes* WCPMTVisAtt5 = new G4VisAttributes(G4Colour(.0,1.,1.));
-  WCPMTVisAtt5->SetForceSolid(true); 
-  G4VisAttributes* VisAttYellow = new G4VisAttributes(G4Colour(1.0,1.,0.));
-  VisAttYellow->SetForceSolid(true); 
-  
-  if(showme){
-    logicWCMultiPMT->SetVisAttributes(VisAttGrey); 
-    logicCylinder->SetVisAttributes(WCPMTVisAtt5);    
-  }
-
-  // Keep track of already created mPMT logical volumes in same map as for PMTs
-  PMTLogicalVolumes[key] = logicWCMultiPMT;
-
-  return logicWCMultiPMT;
-}

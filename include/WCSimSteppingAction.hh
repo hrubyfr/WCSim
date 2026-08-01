@@ -60,6 +60,15 @@ private:
 
   G4double ret[2];
 
+//JR BEGIN EDIT
+public:
+  static int GetPrimaryMuonTrackID() { return primaryMuonTrackID; }
+
+private:
+  static int primaryMuonTrackID;
+  static int primaryMuonEventID;
+//JR END EDIT
+
 };
 
 

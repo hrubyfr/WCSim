@@ -1,9 +1,10 @@
 # nuPRISMBeamTest WCTE macro with no visualization
 
-/run/verbose 1
+/run/verbose 2
 /tracking/verbose 0
 /hits/verbose 0
-
+/control/verbose 2
+/control/echo true
 ###############
 # GEOMETRY
 ###############
@@ -35,6 +36,8 @@
 # 1. Downland the CDS CAD model from WCTE webpage (https://wcte.hyperk.ca/wg/calibration/cds-system/cds-arm-cad-for-physics-simulation/arm-for-simulation-ascii-v2.zip/view), unzip it and set the path
 # 2. Use the following PMT position file where 8 mPMTs are removed 
 #/WCSim/Geometry/SetCDSFile path_to_CDS_file
+#/WCSim/PMT/PositionFile data/mPMT_Position_WCTE_CDS.txt
+#/WCSim/Geometry/SetCDSFile /eos/user/j/jrimmer/sim_work_dir/WCSim/Arm_for_Simulation.stl
 #/WCSim/PMT/PositionFile data/mPMT_Position_WCTE_CDS.txt
 ############################################################################################
 
@@ -161,11 +164,12 @@
 # https://geant4-userdoc.web.cern.ch/UsersGuides/ForApplicationDeveloper/html/GettingStarted/generalParticleSource.html
 # https://geant4-userdoc.web.cern.ch/UsersGuides/ForApplicationDeveloper/html/Control/AllResources/Control/UIcommands/_gps_.html
 /mygen/generator gps
-/gps/particle e-
-/gps/energy 500 MeV
-/gps/direction -1 0 0
-/gps/position 165 0 0
-
+/gps/particle gamma
+/gps/energy 400 MeV
+///gps/direction -1 0 0
+///gps/position 165 0 0
+/gps/direction 0 0 1
+/gps/position 0 -42.47625 -153.7963 cm
 # Or you can use the laser option
 # This is equivalent to the gps command, except that the gps particle energies are saved ignoring their mass
 # for a full list of /gps/ commands see the links above
@@ -229,7 +233,7 @@
 ## set a timer running on WCSimRunAction
 #/WCSimIO/Timer false
 
-#/WCSim/random/seed 20230628
-/run/beamOn 1
+/WCSim/random/seed 596296930
+/run/beamOn 200
 #exit
 

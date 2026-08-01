@@ -5,6 +5,15 @@
 # Core library
 #
 file(GLOB sources ${PROJECT_SOURCE_DIR}/src/*.cc)
+# Custom diagnostic TTrees removed from the active build.  The retained custom
+# truth output consists only of AllSecondaries and AllSecondaryPhotons.
+list(REMOVE_ITEM sources
+        ${PROJECT_SOURCE_DIR}/src/WCSimAllPhotonsTree.cc
+        ${PROJECT_SOURCE_DIR}/src/WCSimMichelAllPhotonsTree.cc
+        ${PROJECT_SOURCE_DIR}/src/WCSimPETree.cc
+        ${PROJECT_SOURCE_DIR}/src/WCSimPhotonTree.cc
+        ${PROJECT_SOURCE_DIR}/src/WCSimSecondaryElectronTree.cc
+        ${PROJECT_SOURCE_DIR}/src/WCSimSecondaryElectronPhotonsTree.cc)
 file(GLOB headers
         ${PROJECT_SOURCE_DIR}/include/*.hh
         ${PROJECT_SOURCE_DIR}/include/*.h

@@ -1,9 +1,7 @@
 #include "WCSimWCSD.hh"
-
-#include "WCSimSteppingAction.hh"
 #include "WCSimDetectorConstruction.hh"
 #include "WCSimTrackInformation.hh"
-
+#include "WCSimAllSecondaryPhotonsTree.hh"
 #include "G4ParticleTypes.hh"
 #include "G4HCofThisEvent.hh"
 #include "G4TouchableHistory.hh"
@@ -11,6 +9,7 @@
 #include "G4ThreeVector.hh"
 #include "G4SDManager.hh"
 #include "G4RunManager.hh"
+#include "G4Event.hh"
 #include "Randomize.hh"
 #include "G4ios.hh"
 
@@ -18,6 +17,84 @@
 #include "G4SystemOfUnits.hh"
 
 #include <sstream>
+
+#include <string>
+
+G4bool WCSimSaveAllSecondaryTruthTrees();
+
+namespace {
+int JRSecondaryPhotonPMTIDFromStep(const G4Step* step)
+{
+  const auto* post = step ? step->GetPostStepPoint() : nullptr;
+  const auto* touch = post ? post->GetTouchable() : nullptr;
+  if (!touch) return -1;
+
+  int pmtCopy = -1;
+  int moduleCopy = -1;
+
+  const int depth = touch->GetHistoryDepth();
+  for (int d = 0; d <= depth; ++d) {
+    const auto* vol = touch->GetVolume(d);
+    if (!vol) continue;
+
+    const std::string nm = vol->GetName();
+
+    if (nm == "pmt") {
+      pmtCopy = touch->GetCopyNumber(d);
+    }
+    if (nm == "WCMultiPMT" ||
+        nm == "WCMultiPMT_AirGap" ||
+        nm == "WCMultiPMT_NoGap") {
+      moduleCopy = touch->GetCopyNumber(d);
+    }
+  }
+
+  // Do not fall back to touch->GetCopyNumber(0).  In non-"pmt" volumes that
+  // copy number can be the mPMT/module copy number, which is how values like
+  // 20--40 ended up in the local PMT slot.
+  // WCTE truth-tree PMT IDs always use 100*moduleCopy + localPMTCopy,
+  // with the local PMT copy number restricted to 0--18.
+  if (pmtCopy < 0 || pmtCopy > 18 || moduleCopy < 0) return -1;
+  return 100 * moduleCopy + pmtCopy;
+}
+
+void JRNoteAllSecondaryPhotonPE(G4Step* aStep,
+                                G4double hitTime,
+                                G4double photonEndEnergy)
+{
+  if (!WCSimSaveAllSecondaryTruthTrees() || !aStep) return;
+
+  G4Track* trk = aStep->GetTrack();
+  if (!trk) return;
+  if (trk->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) return;
+
+  const G4VProcess* cp = trk->GetCreatorProcess();
+  if (!cp || cp->GetProcessName() != "Cerenkov") return;
+
+  // Cache PE information for any Cherenkov optical photon. The matching
+  // AllSecondaryPhotons row is created in WCSimSteppingAction for photons
+  // produced by non-optical parent tracks, including the event primary and
+  // all secondaries. This is only bookkeeping after the normal PE acceptance.
+
+  const G4Event* evt = G4RunManager::GetRunManager()->GetCurrentEvent();
+  const int evtID = evt ? evt->GetEventID() : -1;
+
+  const float lambda_nm = (photonEndEnergy > 0.)
+      ? static_cast<float>(((h_Planck * c_light) / photonEndEnergy) / nm)
+      : -1.f;
+
+  // Use only the WCTE composite identifier.  Never fall back to the
+  // standard global WCSim tube number, since the two number systems are not
+  // interchangeable in the truth tree.
+  const int pePMT = JRSecondaryPhotonPMTIDFromStep(aStep);
+
+  AllSecondaryPhotonsTree_NotePE(evtID,
+                                 trk->GetTrackID(),
+                                 pePMT,
+                                 static_cast<float>(hitTime / ns),
+                                 lambda_nm);
+}
+}
 
 
 WCSimWCSD::WCSimWCSD(G4String CollectionName,
@@ -150,14 +227,14 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
   // sensitive detector (I think).
   
   G4StepPoint        *postStepPoint = aStep->GetPostStepPoint();
-  G4VPhysicalVolume  *postVol = postStepPoint->GetPhysicalVolume();
+  G4VPhysicalVolume  *postVol = postStepPoint ? postStepPoint->GetPhysicalVolume() : nullptr;
   //if (thePhysical)  G4cout << " thePrePV:  " << thePhysical->GetName()  << G4endl;
   //if (postVol) G4cout << " thePostPV: " << postVol->GetName() << G4endl;
   
   //Optical Photon must pass through glass into PMT interior!
   // What about the other way around? TF: current interior won't keep photons alive like in reality
   // Not an issue yet, because then interior needs to be a sensitive detector, when postStepPoint is the glass.
-  if(postVol->GetName() != "InteriorWCPMT")
+  if(!postVol || postVol->GetName() != "InteriorWCPMT")
     return false;
   
 
@@ -212,8 +289,11 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
   }else if (fdet->GetPMT_QE_Method() == 3){
     ratio = 1./(1.-0.25);
     photonQE = fdet->GetPMTQE(WCCollectionName, wavelength,1,200,660,ratio);
+    //photonQE = 0.5; //JR try making QE uniform for a test
   }
-  
+
+// G4cout<<fdet->GetPMT_QE_Method()<<G4endl;
+ // G4cout<<photonQE<<G4endl;  
   if (G4UniformRand() <= photonQE){
     
      G4double local_x = localPosition.x();
@@ -221,6 +301,20 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
      G4double local_z = localPosition.z();
      theta_angle = acos(fabs(local_z)/sqrt(pow(local_x,2)+pow(local_y,2)+pow(local_z,2)))/3.1415926*180.;
      effectiveAngularEfficiency = fdet->GetPMTCollectionEfficiency(theta_angle, volumeName);
+    // G4cout << "Theta "<< theta_angle
+    // << "ang_eff " << effectiveAngularEfficiency <<G4endl;	     
+/*
+     static int qprint = 0;
+if (qprint < 20) {
+  G4cout << "JR QE debug: wl=" << wavelength
+         << " photonQE=" << photonQE
+         << " theta=" << theta_angle
+         << " collEff=" << effectiveAngularEfficiency
+         << " method=" << fdet->GetPMT_QE_Method()
+         << G4endl;
+  qprint++;
+}
+*/
 
      if (G4UniformRand() <= effectiveAngularEfficiency || fdet->UsePMT_Coll_Eff()==0){
        //Retrieve the pointer to the appropriate hit collection. 
@@ -233,10 +327,12 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
        hitsCollection = (WCSimWCHitsCollection*)(HCofEvent->GetHC(collectionID));
 
        // mark the track as having produced a hit
-       if(!trackinfo)
+       if(!trackinfo) {
            trackinfo = new WCSimTrackInformation();
+           aStep->GetTrack()->SetUserInformation(trackinfo);
+       }
        trackinfo->SetProducesHit(true);
-
+      JRNoteAllSecondaryPhotonPE(aStep, hitTime, photonEndEnergy);
        // If this tube hasn't been hit add it to the collection
        if (PMTHitMap[replicaNumber] == 0)
        //if (PMTHitMap.find(replicaNumber) == PMTHitMap.end())  TF attempt to fix
@@ -254,6 +350,9 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
 	   newHit->SetPos(aTrans.NetTranslation());
 	   // Set the hitMap value to the collection hit number
 	   PMTHitMap[replicaNumber] = hitsCollection->insert( newHit );
+	   
+//	   (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddCosInc(cos_inc_f);
+	   
 	   (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddPe(hitTime);
      (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddTrackID(trackID);
 	   (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddParentID(parentSavedTrackID);
@@ -271,6 +370,9 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
 	     
 	 }
        else {
+
+//	 (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddCosInc(cos_inc_f);
+
 	 (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddPe(hitTime);
    (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddTrackID(trackID);
 	 (*hitsCollection)[PMTHitMap[replicaNumber]-1]->AddParentID(parentSavedTrackID);
@@ -291,7 +393,7 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
 }
 
 G4bool WCSimWCSD::ProcessHits_boundary(G4Step* aStep, G4TouchableHistory*)
-{ 
+{
   G4StepPoint*       preStepPoint = aStep->GetPreStepPoint();
   G4StepPoint*       postStepPoint = aStep->GetPostStepPoint();
   G4TouchableHandle  theTouchable = postStepPoint->GetTouchableHandle();
@@ -401,9 +503,12 @@ G4bool WCSimWCSD::ProcessHits_boundary(G4Step* aStep, G4TouchableHistory*)
       hitsCollection = (WCSimWCHitsCollection*)(HCofEvent->GetHC(collectionID));
 
       // mark the track as having produced a hit
-      if(!trackinfo)
+      if(!trackinfo) {
           trackinfo = new WCSimTrackInformation();
+          aStep->GetTrack()->SetUserInformation(trackinfo);
+      }
       trackinfo->SetProducesHit(true);
+      JRNoteAllSecondaryPhotonPE(aStep, hitTime, photonEndEnergy);
 
       // If this tube hasn't been hit add it to the collection
       if (PMTHitMap[replicaNumber] == 0)
@@ -507,4 +612,5 @@ void WCSimWCSD::EndOfEvent(G4HCofThisEvent* HCE)
     */
   } 
 }
+
 

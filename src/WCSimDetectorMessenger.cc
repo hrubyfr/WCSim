@@ -4,8 +4,21 @@
 #include "G4UIdirectory.hh"
 #include "G4UIcommand.hh"
 #include "G4UIparameter.hh"
+#include "G4UIcmdWithABool.hh"
 
 #include "GeometryScan.hh"
+
+namespace {
+G4bool gUseCorrectMPMTTypes = false;
+G4UIcmdWithABool* gUseCorrectMPMTTypesCommand = nullptr;
+}
+
+// Read by the WCTE table-driven placement code.  The default preserves the
+// previous all-in-situ behavior until the macro explicitly opts in.
+G4bool WCSimUseCorrectMPMTTypes()
+{
+  return gUseCorrectMPMTTypes;
+}
 
 WCSimDetectorMessenger::WCSimDetectorMessenger(WCSimDetectorConstruction* WCSimDet)
 :WCSimDetector(WCSimDet)
@@ -610,6 +623,16 @@ WCSimDetectorMessenger::WCSimDetectorMessenger(WCSimDetectorConstruction* WCSimD
   SetPMTPositionInput->SetGuidance("Set filename for PMT position file");
   SetPMTPositionInput->SetParameterName("PMTPositionInput", true);
 
+  gUseCorrectMPMTTypesCommand = new G4UIcmdWithABool(
+      "/WCSim/PMT/UseCorrectMPMTTypes", this);
+  gUseCorrectMPMTTypesCommand->SetGuidance(
+      "If true, honor type-3 ex-situ and type-4 in-situ mPMTs from the PMT position table.");
+  gUseCorrectMPMTTypesCommand->SetGuidance(
+      "If false, force both type-3 and type-4 standard mPMT slots to use in-situ geometry.");
+  gUseCorrectMPMTTypesCommand->SetParameterName("UseCorrectMPMTTypes", false);
+  gUseCorrectMPMTTypesCommand->SetDefaultValue(false);
+  gUseCorrectMPMTTypesCommand->AvailableForStates(G4State_PreInit, G4State_Idle);
+
   // Set the input file to read OD PMT positions
   SetODPMTPositionInput = new G4UIcmdWithAString("/WCSim/PMT/ODPositionFile",this);
   SetODPMTPositionInput->SetGuidance("Set filename for OD PMT position file");
@@ -681,6 +704,8 @@ WCSimDetectorMessenger::~WCSimDetectorMessenger()
   delete PMTPosVar;
   delete TankRadiusChange;
   delete SetPMTPositionInput;
+  delete gUseCorrectMPMTTypesCommand;
+  gUseCorrectMPMTTypesCommand = nullptr;
   delete SetODPMTPositionInput;
   delete SetCDSFile;
 
@@ -695,7 +720,22 @@ WCSimDetectorMessenger::~WCSimDetectorMessenger()
 }
 
 void WCSimDetectorMessenger::SetNewValue(G4UIcommand* command,G4String newValue)
-{    
+{   
+        if (command == gUseCorrectMPMTTypesCommand) {
+          gUseCorrectMPMTTypes = gUseCorrectMPMTTypesCommand->GetNewBoolValue(newValue);
+          G4cout << "WCTE mPMT type placement: "
+                 << (gUseCorrectMPMTTypes
+                     ? "using type-3 ex-situ and type-4 in-situ geometry"
+                     : "forcing type-3/type-4 slots to in-situ geometry")
+                 << G4endl;
+          return;
+        }
+        G4cout << ">>> Messenger called with value: " << newValue << G4endl;
+	G4cout << "!!!!!!!!!!!!!!!!!!!!!!!!!! "<< G4endl;
+	G4cout << "!!!!!!!!!!!!!!!!!!!!!!!!!! "<< G4endl;
+	G4cout << "!!!!!!!!!!!!!!!!!!!!!!!!!! "<< G4endl;
+	G4cout << "!!!!!!!!!!!!!!!!!!!!!!!!!! "<< G4endl;
+	G4cout << "!!!!!!!!!!!!!!!!!!!!!!!!!! "<< G4endl;	
 	if( command == PMTConfig ) { 
 		WCSimDetector->SetIsUpright(false);
 		WCSimDetector->SetIsEggShapedHyperK(false);
@@ -775,9 +815,12 @@ void WCSimDetectorMessenger::SetNewValue(G4UIcommand* command,G4String newValue)
 		WCSimDetector->SetIsNuPrism(true);
 		WCSimDetector->SetNuPrismBeamTest_mPMTGeometry();
 		} else if ( newValue == "nuPRISMBeamTest_16cShort_mPMT") {
+	        //WCSimDetector->isNuPrismBeamTest_16cShort = true;
 		WCSimDetector->SetIsNuPrismBeamTest_16cShort(true); // Jul.01,2021 L.Anthony
+		G4cout << ">>> [MSG] SetIsNuPrismBeamTest_16cShort(true) called" << G4endl;
                 WCSimDetector->SetIsNuPrism(true);
                 WCSimDetector->SetNuPrismBeamTest_16cShort_mPMTGeometry();
+		G4cout << ">>> [MSG] SetNuPrismBeamTest_16cShort_mPMTGeometry() returned" << G4endl;
 		} else if ( newValue == "nuPRISMShort_mPMT") {
 		  WCSimDetector->SetIsNuPrism(true);
 		  WCSimDetector->SetNuPrismShort_mPMTGeometry();

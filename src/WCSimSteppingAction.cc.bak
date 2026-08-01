@@ -1,0 +1,1931 @@
+#include "WCSimSteppingAction.hh"
+#include "G4SystemOfUnits.hh"
+#include <stdlib.h>
+#include <stdio.h>
+#include <WCSimRootEvent.hh>
+//#include <G4SIunits.hh>
+#include <G4OpticalPhoton.hh>
+//#include "G4OpticalPhoton.hh"
+#include "G4Track.hh"
+#include "G4VProcess.hh"
+#include "G4VParticleChange.hh"
+#include "G4SteppingVerbose.hh"
+#include "G4SteppingManager.hh"
+#include "G4PVParameterised.hh"
+#include "G4PVReplica.hh"
+#include "G4SDManager.hh"
+#include "G4RunManager.hh"
+#include "G4OpBoundaryProcess.hh"
+#include "TTree.h"
+#include "TFile.h"
+#include "TDirectory.h"
+#include "G4RunManager.hh"
+#include "WCSimAllPhotonsTree.hh"
+#include "G4PhysicalConstants.hh"
+//JR EDIT
+#include "WCSimMichelAllPhotonsTree.hh"
+#include <unordered_map>
+#include "G4SystemOfUnits.hh"
+#include "G4Step.hh"
+#include "G4StepPoint.hh"
+#include "WCSimSecondaryElectronPhotonsTree.hh"
+#include "WCSimAllSecondariesTree.hh"
+#include "WCSimAllSecondaryPhotonsTree.hh"
+#include <string>
+#include <cmath>
+/*
+//Debug
+static int    dbg_evt_ph = -1;
+static long long n_ckov_created = 0;
+static double t_ckov_min = 1e99;
+static double t_ckov_max = -1e99;
+//debug end
+*/
+
+int WCSimSteppingAction::primaryMuonTrackID = -1;
+int WCSimSteppingAction::primaryMuonEventID = -1;
+
+extern int g_michel_trk;   // set in TrackingAction when you identify the Michel e±
+extern int g_wcsim_evt;    // your per-event number 
+
+struct MichelPhotonStartInfo {
+  int evt = -1;
+  int trk = -1;
+  int parent = -1;
+  int pdg = -1;
+  int michel_trk = -1;
+
+  float sx_cm = 0, sy_cm = 0, sz_cm = 0, st_ns = 0;
+  float dir_x = 0, dir_y = 0, dir_z = 0;
+  float lambda_nm = 0;
+
+  std::string creator = "";
+};
+
+struct PrimaryPhotonStartInfo {
+  int evt = -1;
+  int trk = -1;
+  int par = -1;
+  int pdg = -1;
+  int muAncestorID = -1;
+
+  float edir_x = 0, edir_y = 0, edir_z = 0;
+  float ex_cm = 0, ey_cm = 0, ez_cm = 0, et_ns = 0;
+
+  float Estart_MeV = 0;
+  float muKE_MeV = 0;
+  int   muStep = -1;
+
+  float lambda_nm = 0;
+  std::string creator = "";
+};
+
+struct SecondaryElectronPhotonStartInfo {
+  int evt = -1;
+  int trk = -1;
+  int parent = -1;
+  int pdg = -1;
+  int sec_e_trk = -1;
+
+  float sx_cm = 0, sy_cm = 0, sz_cm = 0, st_ns = 0;
+  float dir_x = 0, dir_y = 0, dir_z = 0;
+  float lambda_nm = 0;
+
+  std::string creator = "";
+};
+
+struct AllSecondaryPhotonStartInfo {
+  int evt = -1;
+  int trk = -1;
+  int parent = -1;
+  int parent_pdg = 0;
+  int parent_parent = -1;
+  int parent_step = -1;
+  int pdg = 0;
+
+  float parent_ke_MeV = 0.f;
+  float sx_cm = 0.f, sy_cm = 0.f, sz_cm = 0.f, st_ns = 0.f;
+  float dir_x = 0.f, dir_y = 0.f, dir_z = 0.f;
+  float lambda_nm = 0.f;
+
+  int hit_pmt = -1;
+  float hit_x_cm = 0.f, hit_y_cm = 0.f, hit_z_cm = 0.f, hit_t_ns = 0.f;
+  std::string hit_volume = "";
+
+  std::string creator = "";
+  std::string parent_creator = "";
+};
+
+static std::string JRNameOfVolume(const G4VPhysicalVolume* pv)
+{
+  return pv ? std::string(pv->GetName()) : std::string("NONE");
+}
+
+static std::string JRNameOfMaterial(const G4StepPoint* point)
+{
+  const auto* mat = point ? point->GetMaterial() : nullptr;
+  return mat ? std::string(mat->GetName()) : std::string("NONE");
+}
+
+static bool JRIsLocalPMTVolumeName(const std::string& name)
+{
+  // Match the older working TTrees: only the actual per-PMT physical
+  // volume named "pmt" is a PMT hit.  Do not accept WCMultiPMT /
+  // other PMT-like container names here, because their copy numbers are
+  // module/slot copy numbers, not local PMT indices 0..18.
+  return (name == "pmt");
+}
+
+static int JRPMTIDFromStep(const G4Step* step)
+{
+  const auto* post = step ? step->GetPostStepPoint() : nullptr;
+  const auto* touch = post ? post->GetTouchable() : nullptr;
+  if (!touch) return -1;
+
+  int pmtCopy = -1;
+  int moduleCopy = -1;
+
+  const int depth = touch->GetHistoryDepth();
+  for (int d = 0; d <= depth; ++d) {
+    const auto* vol = touch->GetVolume(d);
+    if (!vol) continue;
+    const std::string nm = vol->GetName();
+
+    if (nm == "pmt") {
+      pmtCopy = touch->GetCopyNumber(d);
+    }
+    if (nm == "WCMultiPMT" ||
+        nm == "WCMultiPMT_AirGap" ||
+        nm == "WCMultiPMT_NoGap") {
+      moduleCopy = touch->GetCopyNumber(d);
+    }
+  }
+
+  // Do not fall back to touch->GetCopyNumber(0).  If the post volume is a
+  // module/container rather than the true local "pmt" volume, that fallback
+  // is exactly how module copy numbers such as 20--40 can leak into the PMT
+  // branch.
+  if (pmtCopy < 0) return -1;
+
+  // WCTE mPMTs have local PMT indices 0..18.  If this ever fails, do not
+  // write a bogus PMT id; leave it unassigned so the problem is visible.
+  if (pmtCopy > 18) return -1;
+
+  // Keep the same full hit_pmt convention used by the older photon TTrees:
+  // 100*moduleCopy + localPMTCopy.  The local PMT component is therefore
+  // always hit_pmt % 100 and is guaranteed to be 0..18 here.
+  return (moduleCopy >= 0) ? (100 * moduleCopy + pmtCopy) : pmtCopy;
+}
+
+//static std::unordered_set<const G4Track*> g_michelPhotonFilled;
+static std::unordered_map<const G4Track*, MichelPhotonStartInfo> g_michelPhotonBirth; // key = photon trackID
+static int g_birth_evt_latch = -1; // to clear per event
+
+static std::unordered_map<const G4Track*, PrimaryPhotonStartInfo> g_primaryPhotonBirth;
+static int g_primary_birth_evt_latch = -1;
+
+static std::unordered_map<const G4Track*, SecondaryElectronPhotonStartInfo> g_secondaryElectronPhotonBirth;
+static int g_secondary_e_birth_evt_latch = -1;
+
+static std::unordered_map<const G4Track*, AllSecondaryPhotonStartInfo> g_allSecondaryPhotonBirth;
+static int g_all_secondary_birth_evt_latch = -1;
+
+//JR EDIT END
+
+
+
+
+G4int WCSimSteppingAction::n_photons_through_mPMTLV = 0;
+G4int WCSimSteppingAction::n_photons_through_acrylic = 0;
+G4int WCSimSteppingAction::n_photons_through_gel = 0;
+G4int WCSimSteppingAction::n_photons_on_blacksheet = 0;
+G4int WCSimSteppingAction::n_photons_on_smallPMT = 0;
+
+///////////////////////////////////////////////
+///// BEGINNING OF WCSIM STEPPING ACTION //////
+///////////////////////////////////////////////
+
+
+WCSimSteppingAction::WCSimSteppingAction(WCSimRunAction *myRun, WCSimDetectorConstruction *myDet) : runAction(myRun), det(myDet) {
+
+}
+
+
+void WCSimSteppingAction::UserSteppingAction(const G4Step* aStep)
+{
+  
+  	//Begin JR Edit
+
+// --- Debug: print when the mu- actually dies (decay vs capture vs exit) ---
+/*
+{
+  auto* trk = aStep->GetTrack();
+  if (trk && trk->GetDefinition()->GetPDGEncoding() == 13) { // mu-
+    // Detect "about to die": after this step, track won't be alive
+    const auto status_after = trk->GetTrackStatus(); // status *after* processes applied to this step
+    if (status_after != fAlive) {
+
+      auto* post = aStep->GetPostStepPoint();
+      const G4VProcess* proc = post ? post->GetProcessDefinedStep() : nullptr;
+
+      const G4String endProc = proc ? proc->GetProcessName() : "NONE";
+
+      const auto* pv = trk->GetVolume();
+      const G4String volName = pv ? pv->GetName() : "NONE";
+
+      const auto* mat = (pv && pv->GetLogicalVolume()) ? pv->GetLogicalVolume()->GetMaterial() : nullptr;
+      const G4String matName = mat ? mat->GetName() : "NONE";
+
+      const auto pos = trk->GetPosition();
+
+      G4cout << "[MU-END] evt="
+             << G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID()
+             << " trk=" << trk->GetTrackID()
+             << " endProc=" << endProc
+             << " vol=" << volName
+             << " mat=" << matName
+             << " x(mm)=" << (pos.x()/mm)
+             << " y(mm)=" << (pos.y()/mm)
+             << " z(mm)=" << (pos.z()/mm)
+             << " t(ns)=" << (trk->GetGlobalTime()/ns)
+             << G4endl;
+    }
+  }
+}	
+	
+	
+*/	
+		
+//Debug code for mu- decay
+
+// ---------- DEBUG: mu- stopping and at-rest process ----------
+auto* trk = aStep->GetTrack();
+
+
+// ===== JR DEBUG: prove SteppingAction is running and show g_michel_trk per event =====
+{
+  const int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+  static int last_evt_print = -1;
+  if (evtID != last_evt_print) {
+    last_evt_print = evtID;
+    G4cout << "[DBG-EVT] evt=" << evtID
+           << " g_michel_trk=" << g_michel_trk
+           << G4endl;
+  }
+}
+
+
+if (trk && trk->GetDefinition()->GetPDGEncoding() == 13) { // mu-
+  const int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+
+  // Report first time in each event that mu- gets very low KE (i.e. "stops")
+  if (trk->GetKineticEnergy() < 0.05*MeV) {
+    static int last_evt_stop = -1;
+    if (evtID != last_evt_stop) {
+      last_evt_stop = evtID;
+
+      const auto* vol = trk->GetVolume();
+      const auto* mat = trk->GetMaterial();
+
+      G4cout << "[MU-STOP] evt=" << evtID
+             << " trk=" << trk->GetTrackID()
+             << " KE(MeV)=" << (trk->GetKineticEnergy()/MeV)
+             << " t(ns)=" << (trk->GetGlobalTime()/ns)
+             << " vol=" << (vol ? vol->GetName() : "NONE")
+             << " mat=" << (mat ? mat->GetName() : "NONE")
+             << G4endl;
+    }
+  }
+
+  // If this step is an at-rest step, print which process did it
+  const G4StepPoint* post = aStep->GetPostStepPoint();
+  if (post && post->GetStepStatus() == fAtRestDoItProc) {
+    const G4VProcess* p = post->GetProcessDefinedStep();
+    const G4String pname = p ? p->GetProcessName() : "NONE";
+
+    static int last_evt_rest = -1;
+    if (evtID != last_evt_rest) {
+      last_evt_rest = evtID;
+
+      G4cout << "[MU-ATREST] evt=" << evtID
+             << " proc=" << pname
+             << " t(ns)=" << (trk->GetGlobalTime()/ns)
+             << G4endl;
+    }
+  }
+}
+//End debug code for mu- decay	
+	
+auto* trk_ph = aStep->GetTrack();
+
+// WCSimSteppingAction.cc
+
+if (trk_ph->GetDefinition() == G4OpticalPhoton::Definition()) {
+
+  //const double tcut = 500.0*ns;   // choose based on your DAQ window
+  const double tcut = 20000.0*ns;
+  const int    ncut = 5000;        // tighten until runtime is acceptable
+
+  if (trk_ph->GetGlobalTime() > tcut || trk_ph->GetCurrentStepNumber() > ncut) {
+    trk_ph->SetTrackStatus(fStopAndKill);
+  }
+}
+
+
+if (trk_ph->GetDefinition() == G4OpticalPhoton::Definition()) {
+
+  auto* post = aStep->GetPostStepPoint();
+  auto* proc = post ? post->GetProcessDefinedStep() : nullptr;
+
+  if (trk_ph->GetKineticEnergy() < 0) {
+    static int n = 0;
+    if (n++ < 20) {
+      G4cout << "NEG OPTICAL TRACK AFTER STEP: "
+             << trk_ph->GetKineticEnergy()/MeV << " MeV"
+             << " proc=" << (proc ? proc->GetProcessName() : "NONE")
+             << " vol=" << (trk_ph->GetVolume() ? trk_ph->GetVolume()->GetName() : "NULL")
+             << G4endl;
+    }
+    trk_ph->SetTrackStatus(fStopAndKill);
+    trk_ph->SetKineticEnergy(0.0);
+  }
+}
+
+
+
+
+  const G4Event* evt = G4RunManager::GetRunManager()->GetCurrentEvent();
+const int evid = evt ? evt->GetEventID() : -1;
+
+// reset once per event
+if (evid != primaryMuonEventID) {
+  primaryMuonEventID = evid;
+  primaryMuonTrackID = -1;
+}
+
+//Decide if you want to look for only the primary
+bool do_primary_block = true;
+// Get current track
+const G4Track* stepTrack = aStep->GetTrack();
+
+if (!stepTrack) do_primary_block = false;
+
+
+
+
+if (do_primary_block){
+
+
+// ------------------------------------------------------------
+// Latch the actual physical primary track ID for this event
+// ------------------------------------------------------------
+if (primaryMuonTrackID < 0) {
+
+  const G4Event* evt = G4RunManager::GetRunManager()->GetCurrentEvent();
+  if (evt) {
+    const G4PrimaryVertex* pvtx = evt->GetPrimaryVertex(0);
+    if (pvtx) {
+      const G4PrimaryParticle* pprim = pvtx->GetPrimary();
+      if (pprim) {
+        const int primaryPDG = pprim->GetPDGcode();
+
+        // Latch the Geant4 track corresponding to the generated primary
+        // Require:
+        //   - no parent
+        //   - same PDG as event primary
+        //   - first step of that track (extra safety)
+        if (stepTrack->GetParentID() == 0 &&
+            stepTrack->GetDefinition()->GetPDGEncoding() == primaryPDG &&
+            stepTrack->GetCurrentStepNumber() == 1) {
+          primaryMuonTrackID = stepTrack->GetTrackID();
+        }
+      }
+    }
+  }
+}
+
+// If we still have not found the event primary, do nothing
+if (primaryMuonTrackID < 0) do_primary_block = false;
+
+// ------------------------------------------------------------
+// Only consider steps of the latched physical primary
+// ------------------------------------------------------------
+//const G4Track* trk = aStep->GetTrack();
+if (!trk) do_primary_block = false;
+
+if (trk->GetTrackID() != primaryMuonTrackID) do_primary_block = false;
+if (trk->GetParentID() != 0) do_primary_block = false;   // extra safety
+
+// Optional extra check: confirm this matches the event primary PDG
+//const G4Event* evt = G4RunManager::GetRunManager()->GetCurrentEvent();
+if (!evt) do_primary_block = false;
+
+const G4PrimaryVertex* pvtx = evt->GetPrimaryVertex(0);
+if (!pvtx) do_primary_block = false;
+
+const G4PrimaryParticle* pprim = pvtx->GetPrimary();
+if (!pprim) do_primary_block = false;
+
+const int primaryPDG = pprim->GetPDGcode();
+const int pdg = trk->GetDefinition()->GetPDGEncoding();
+if (pdg != primaryPDG) do_primary_block = false;
+}
+//End of guards for primary block
+
+const auto* secs = aStep->GetSecondaryInCurrentStep();
+
+
+//Fill AllPhotonsTree
+
+if (do_primary_block) {
+  if (secs) {
+    for (auto* sec : *secs) {
+      if (!sec) continue;
+      if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+
+      auto* cp = sec->GetCreatorProcess();
+      if (!(cp && cp->GetProcessName() == "Cerenkov")) continue;
+
+      PrimaryPhotonStartInfo info;
+
+      info.evt = evt->GetEventID();
+      //info.trk = sec->GetTrackID();
+      info.par = trk->GetTrackID();
+      info.muAncestorID = trk->GetTrackID();
+      info.pdg = sec->GetDefinition()->GetPDGEncoding();
+
+      auto pos = sec->GetPosition();
+      info.ex_cm = pos.x()/cm;
+      info.ey_cm = pos.y()/cm;
+      info.ez_cm = pos.z()/cm;
+      info.et_ns = sec->GetGlobalTime()/ns;
+
+      auto dir = sec->GetMomentumDirection();
+      info.edir_x = dir.x();
+      info.edir_y = dir.y();
+      info.edir_z = dir.z();
+
+      info.Estart_MeV = trk->GetVertexKineticEnergy()/MeV;
+
+      const auto* pre = aStep->GetPreStepPoint();
+      info.muKE_MeV = pre ? (pre->GetKineticEnergy()/MeV)
+                          : (trk->GetKineticEnergy()/MeV);
+
+      info.muStep = trk->GetCurrentStepNumber();
+
+      const G4double Eph = sec->GetTotalEnergy();
+      info.lambda_nm = (h_Planck * c_light / Eph) / nm;
+
+      info.creator = cp->GetProcessName();
+
+      g_primaryPhotonBirth[sec] = info;
+    }
+  }
+}
+
+
+/*
+if (do_primary_block){
+
+// ------------------------------------------------------------
+// Save Cherenkov optical photons created in this primary's step
+// ------------------------------------------------------------
+//const auto* secs = aStep->GetSecondaryInCurrentStep();
+if (secs) {
+  for (auto* sec : *secs) {
+    if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+
+    auto* cp = sec->GetCreatorProcess();
+    if (!(cp && cp->GetProcessName() == "Cerenkov")) continue;
+
+    a_evt = evt->GetEventID();
+    a_trk = sec->GetTrackID();
+    a_par = trk->GetTrackID();
+    a_muAncestorID = trk->GetTrackID();   // name unchanged, but now means "primary ancestor ID"
+    a_pdg = sec->GetDefinition()->GetPDGEncoding(); // optical photon often 0 in WCSim
+
+    auto pos = sec->GetPosition();
+    a_ex_cm = pos.x()/cm;
+    a_ey_cm = pos.y()/cm;
+    a_ez_cm = pos.z()/cm;
+    a_et_ns = sec->GetGlobalTime()/ns;
+
+    auto dir = sec->GetMomentumDirection();
+    a_edir_x = dir.x();
+    a_edir_y = dir.y();
+    a_edir_z = dir.z();
+
+    a_Estart_MeV = trk->GetVertexKineticEnergy()/MeV;
+
+    // KE of the primary at this step (pre-step KE)
+    const auto* pre = aStep->GetPreStepPoint();
+    a_muKE_MeV = pre ? (pre->GetKineticEnergy()/MeV)
+                     : (trk->GetKineticEnergy()/MeV);
+
+    // Step number of the primary
+    a_muStep = trk->GetCurrentStepNumber();
+
+    const G4double Eph = sec->GetTotalEnergy();
+    a_lambda_nm = (h_Planck * c_light / Eph) / nm;
+
+    a_creator = cp->GetProcessName();
+
+    AllPhotonsTree_Fill();
+  }
+}
+}
+*/
+
+/* OLD
+// latch the primary muon trackID (first time we see it)
+const G4Track* stepTrack = aStep->GetTrack();
+if (stepTrack && primaryMuonTrackID < 0) {
+  const int pdg = stepTrack->GetDefinition()->GetPDGEncoding();
+  if (stepTrack->GetParentID() == 0 && (pdg == 13 || pdg == -13)) {
+    primaryMuonTrackID = stepTrack->GetTrackID();
+  }
+}
+//auto* trk = aStep->GetTrack();
+//For AllPhotonsTree:
+//
+// ... your existing primary-muon selection ...
+if (!trk) return;
+
+// Only consider steps of the primary muon
+if (trk->GetTrackID() != primaryMuonTrackID) return;
+const int pdg = trk->GetDefinition()->GetPDGEncoding();
+if (!(pdg == 13 || pdg == -13)) return;
+if (trk->GetParentID() != 0) return;   // extra safety
+
+
+const auto* secs = aStep->GetSecondaryInCurrentStep();
+if (secs) {
+  for (auto* s : *secs) {
+    if (s->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+    auto* cp = s->GetCreatorProcess();
+    if (!(cp && cp->GetProcessName() == "Cerenkov")) continue;
+
+    a_evt = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+    a_trk = s->GetTrackID();
+    a_par = trk->GetTrackID();
+    a_muAncestorID = trk->GetTrackID();
+    a_pdg = s->GetDefinition()->GetPDGEncoding(); // optical photon is usually 0
+
+    auto pos = s->GetPosition();
+    a_ex_cm = pos.x()/cm; a_ey_cm = pos.y()/cm; a_ez_cm = pos.z()/cm;
+    a_et_ns = s->GetGlobalTime()/ns;
+
+    auto dir = s->GetMomentumDirection();
+    a_edir_x = dir.x(); a_edir_y = dir.y(); a_edir_z = dir.z();
+
+    a_Estart_MeV = trk->GetVertexKineticEnergy()/MeV;
+    
+    // NEW: KE of the muon at this step (choose pre-step as "energy when step begins")
+    const auto* pre = aStep->GetPreStepPoint();
+    a_muKE_MeV = pre ? (pre->GetKineticEnergy()/MeV) : (trk->GetKineticEnergy()/MeV);
+
+    // NEW: muon step number (1,2,3,...)
+    a_muStep = trk->GetCurrentStepNumber();
+
+    const G4double Eph = s->GetTotalEnergy();
+    a_lambda_nm = (h_Planck*c_light/Eph)/nm;
+
+    a_creator = cp->GetProcessName();
+
+    AllPhotonsTree_Fill();
+  }
+}
+*/
+
+//Now fill  ck tree
+  static TTree* ck_tree = nullptr;
+/*
+  static int   b_event   = -1;
+  static int   b_trackID = -1;
+  static int   b_step    = -1;
+  static int   b_pdg     = 0;
+  static int   b_nck     = 0;
+
+  static float b_x = 0.f, b_y = 0.f, b_z = 0.f;  // cm
+  static float b_t = 0.f;                        // ns
+  static float b_ke = 0.f;                       // MeV
+  static float b_step_len = 0.f;  // cm
+*/
+
+// --- Per-step quantities ---
+static int   b_event    = -1;
+static int   b_trackID  = -1;
+static int   b_step     = -1;
+static int   b_pdg      = 0;
+static int   b_n_ck     = 0;
+
+static float b_x = 0.f, b_y = 0.f, b_z = 0.f, b_t = 0.f;
+static float b_ke = 0.f;
+static float b_ke_pre  = 0.f;
+static float b_ke_post = 0.f;
+static float b_edep    = 0.f;
+static float b_step_len = 0.f;
+
+// ROOT requires std::string to persist
+static std::string b_mat;
+static std::string b_step_proc;
+
+   // Create the tree the first time we enter this function
+  if (!ck_tree) {
+    ck_tree = new TTree("ck_step", "Cherenkov photons per step for primary mu-");
+
+    ck_tree->Branch("event",    &b_event,   "event/I");
+  ck_tree->Branch("trackID",  &b_trackID, "trackID/I");
+  ck_tree->Branch("step",     &b_step,    "step/I");
+  ck_tree->Branch("pdg",      &b_pdg,     "pdg/I");
+  ck_tree->Branch("n_ck",     &b_n_ck,    "n_ck/I");
+
+  ck_tree->Branch("x", &b_x, "x/F");
+  ck_tree->Branch("y", &b_y, "y/F");
+  ck_tree->Branch("z", &b_z, "z/F");
+  ck_tree->Branch("t", &b_t, "t/F");
+
+  ck_tree->Branch("ke",       &b_ke,       "ke/F");
+  ck_tree->Branch("ke_pre",   &b_ke_pre,   "ke_pre/F");
+  ck_tree->Branch("ke_post",  &b_ke_post,  "ke_post/F");
+  ck_tree->Branch("edep",     &b_edep,     "edep/F");
+  ck_tree->Branch("step_len", &b_step_len, "step_len/F");
+
+  ck_tree->Branch("mat",        &b_mat);
+  ck_tree->Branch("step_proc", &b_step_proc);
+    /*
+    ck_tree->Branch("event",   &b_event,   "event/I");
+    ck_tree->Branch("trackID", &b_trackID, "trackID/I");
+    ck_tree->Branch("step",    &b_step,    "step/I");
+    ck_tree->Branch("pdg",     &b_pdg,     "pdg/I");
+    ck_tree->Branch("n_ck",    &b_nck,     "n_ck/I");
+
+    ck_tree->Branch("x",       &b_x,       "x/F");
+    ck_tree->Branch("y",       &b_y,       "y/F");
+    ck_tree->Branch("z",       &b_z,       "z/F");
+    ck_tree->Branch("t",       &b_t,       "t/F");
+    ck_tree->Branch("ke",      &b_ke,      "ke/F");
+    ck_tree->Branch("step_len", &b_step_len, "step_len/F");
+*/
+  }
+
+  //auto* trk = aStep->GetTrack();
+  //
+ if (trk && trk->GetTrackID() == 1 ){//&& std::abs(trk->GetDefinition()->GetPDGEncoding()) == 13) {
+//if (!trk) return;
+
+// Primary muon only
+//if (trk->GetTrackID() != 1) return;
+//if (trk->GetDefinition()->GetPDGEncoding() != 13) return;
+
+// Step info
+auto* pre  = aStep->GetPreStepPoint();
+auto* post = aStep->GetPostStepPoint();
+
+// Count Cherenkov photons created in this step
+b_n_ck = 0;
+//const auto* secs = aStep->GetSecondaryInCurrentStep();
+if (secs) {
+  for (auto* sec : *secs) {
+    if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+    auto* cp = sec->GetCreatorProcess();
+    if (cp && cp->GetProcessName() == "Cerenkov") b_n_ck++;
+  }
+}
+
+// Fill scalars
+b_event   = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+b_trackID = trk->GetTrackID();
+b_step    = trk->GetCurrentStepNumber();
+b_pdg     = trk->GetDefinition()->GetPDGEncoding();
+
+b_x = pre->GetPosition().x() / cm;
+b_y = pre->GetPosition().y() / cm;
+b_z = pre->GetPosition().z() / cm;
+b_t = pre->GetGlobalTime()  / ns;
+
+b_ke      = trk->GetKineticEnergy() / MeV;
+b_ke_pre  = pre->GetKineticEnergy()  / MeV;
+b_ke_post = post->GetKineticEnergy() / MeV;
+
+b_edep     = aStep->GetTotalEnergyDeposit() / MeV;
+b_step_len = aStep->GetStepLength() / cm;
+
+// Material + process
+auto* mat = pre->GetMaterial();
+b_mat = mat ? mat->GetName() : "NONE";
+
+auto* proc = post->GetProcessDefinedStep();
+b_step_proc = proc ? proc->GetProcessName() : "NONE";
+
+// Fill tree (DO NOT return early — keep all steps)
+ck_tree->Fill();
+
+}
+  
+  /*
+  // --- Select the primary mu- (your run: trackID==1, pdg==13) ---
+  auto* trk = aStep->GetTrack();
+  if (!trk) return;
+
+  if (trk->GetTrackID() != 1) return;
+  if (trk->GetDefinition()->GetPDGEncoding() != 13) return;
+
+  // --- Count Cherenkov optical photons produced in THIS step ---
+  int n_ck = 0;
+  const auto* secs = aStep->GetSecondaryInCurrentStep();
+  if (secs) {
+    for (auto* s : *secs) {
+      if (s->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+      auto* cp = s->GetCreatorProcess();
+      if (cp && cp->GetProcessName() == "Cerenkov") n_ck++;
+    }
+  }
+
+  //if (n_ck <= 0) return;  // only write steps that produced Cherenkov photons
+
+  // --- Fill branches ---
+  auto* pre = aStep->GetPreStepPoint();
+  if (!pre) return;
+
+  b_event   = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+  b_trackID = trk->GetTrackID();
+  b_step    = trk->GetCurrentStepNumber();
+  b_pdg     = trk->GetDefinition()->GetPDGEncoding();
+  b_nck     = n_ck;
+
+  const auto pos = pre->GetPosition();
+  b_x  = pos.x() / cm;
+  b_y  = pos.y() / cm;
+  b_z  = pos.z() / cm;
+  b_t  = pre->GetGlobalTime() / ns;
+  b_ke = trk->GetKineticEnergy() / MeV;
+  b_step_len = aStep->GetStepLength() / cm;
+
+  ck_tree->Fill();
+*/
+
+
+/*    
+    auto* trk = aStep->GetTrack();
+  if (!trk) return;
+  
+  if (trk->GetCurrentStepNumber() == 1 && trk->GetParentID() == 0) {
+  int pdg = trk->GetDefinition()->GetPDGEncoding();
+  double ke = trk->GetKineticEnergy()/MeV;
+  double vz = trk->GetVertexPosition().z()/cm;
+
+  auto* vol = aStep->GetPreStepPoint()->GetTouchableHandle()->GetVolume();
+  G4String vname = vol ? vol->GetName() : "NONE";
+
+  G4cout << "PRIMARY TRACK STEP1: "
+         << "trackID=" << trk->GetTrackID()
+         << " pdg=" << pdg
+         << " KE=" << ke << " MeV"
+         << " vertex_z=" << vz << " cm"
+         << " vol=" << vname
+         << G4endl;
+}
+
+
+  if (trk->GetTrackID() != 1) return;
+if (trk->GetDefinition()->GetPDGEncoding() != 13) return; // mu-
+
+int n_ck = 0;
+const auto* secs = aStep->GetSecondaryInCurrentStep();
+if (secs) {
+  for (auto* s : *secs) {
+    if (s->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+    auto* cp = s->GetCreatorProcess();
+    if (cp && cp->GetProcessName() == "Cerenkov") n_ck++;
+  }
+}
+
+if (n_ck > 0) {
+  auto* pre = aStep->GetPreStepPoint();
+  G4cout << "MU CK STEP: step=" << trk->GetCurrentStepNumber()
+         << " z=" << pre->GetPosition().z()/cm << " cm"
+         << " KE=" << trk->GetKineticEnergy()/MeV << " MeV"
+         << " n_ck=" << n_ck
+         << G4endl;
+}
+
+
+  // Reset per event
+  int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+  if (evtID != g_lastEventID) {
+    g_lastEventID = evtID;
+    g_realMuonTrackID = -1;
+  }
+
+  // --- Step 1: identify the real GPS mu- (once per event) ---
+  if (g_realMuonTrackID < 0) {
+    if (trk->GetCurrentStepNumber() == 1 &&
+        trk->GetDefinition()->GetPDGEncoding() == 13 &&  // mu-
+        trk->GetParentID() == 0)                         // primary
+    {
+      double ke = trk->GetKineticEnergy()/MeV;
+      double vz = trk->GetVertexPosition().z()/cm;
+
+      // Reject the dummy: KE=0 and absurd vertex (your dummy is at -100000 cm)
+      // Keep "real" muons: KE ~ O(100 MeV) and vertex in detector-scale region
+      if (ke > 1.0 && std::abs(vz) < 10000.0) { // 10 km is a generous sanity bound
+        g_realMuonTrackID = trk->GetTrackID();
+        G4cout << "REAL GPS MUON FOUND: event=" << evtID
+               << " trackID=" << g_realMuonTrackID
+               << " vertex_z=" << vz << " cm"
+               << " KE=" << ke << " MeV"
+               << G4endl;
+      } else {
+        // Debug print so you can see the dummy candidates too
+        G4cout << "REJECT MUON CANDIDATE: event=" << evtID
+               << " trackID=" << trk->GetTrackID()
+               << " vertex_z=" << vz << " cm"
+               << " KE=" << ke << " MeV"
+               << G4endl;
+      }
+    }
+  }
+
+  // If we still haven't identified it, nothing else to do yet
+  if (g_realMuonTrackID < 0) return;
+
+  // --- Step 2: only process steps of the real muon ---
+  if (trk->GetTrackID() != g_realMuonTrackID) return;
+  if (trk->GetDefinition()->GetPDGEncoding() != 13) return;
+
+  // Count Cherenkov optical photons produced this step
+  int n_ck = 0;
+  const auto* secs = aStep->GetSecondaryInCurrentStep();
+  if (secs) {
+    for (auto* s : *secs) {
+      if (s->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+      auto* cp = s->GetCreatorProcess();
+      if (cp && cp->GetProcessName() == "Cerenkov") n_ck++;
+    }
+  }
+
+  if (n_ck > 0) {
+    auto* pre = aStep->GetPreStepPoint();
+    auto pos = pre->GetPosition();
+    G4cout << "Muon step " << trk->GetCurrentStepNumber()
+           << " z=" << pos.z()/cm << " cm"
+           << " KE=" << trk->GetKineticEnergy()/MeV << " MeV"
+           << " n_ck=" << n_ck
+           << G4endl;
+  }
+*/
+    //End JR edit
+	
+    const G4Event *event = G4EventManager::GetEventManager()->GetConstCurrentEvent();
+    if(event->IsAborted() || event->GetEventID() < 0)
+      return;
+  //DISTORTION must be used ONLY if INNERTUBE or INNERTUBEBIG has been defined in BidoneDetectorConstruction.cc
+  
+  const G4Track* track       = aStep->GetTrack();
+
+  // ============================================================
+  // AllSecondaries: one row per step for the event primary and
+  // every non-optical secondary particle. This is passive truth
+  // logging only; it does not alter tracking or physics processes.
+  // Primary particles are identifiable by parent == 0 and creator == "NONE".
+  // ============================================================
+  if (track &&
+      track->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) {
+
+    const auto* def = track->GetDefinition();
+    const auto* pre = aStep->GetPreStepPoint();
+    const auto* post = aStep->GetPostStepPoint();
+
+    AllSecondariesTree_ResetVars();
+
+    alls_evt    = event ? event->GetEventID() : -1;
+    alls_trk    = track->GetTrackID();
+    alls_parent = track->GetParentID();
+    alls_pdg    = def ? def->GetPDGEncoding() : 0;
+    alls_step   = track->GetCurrentStepNumber();
+
+    if (pre) {
+      const auto pos = pre->GetPosition();
+      alls_x_cm = pos.x() / cm;
+      alls_y_cm = pos.y() / cm;
+      alls_z_cm = pos.z() / cm;
+      alls_t_ns = pre->GetGlobalTime() / ns;
+
+      const auto dir = pre->GetMomentumDirection();
+      alls_dir_x = dir.x();
+      alls_dir_y = dir.y();
+      alls_dir_z = dir.z();
+
+      alls_ke_MeV = pre->GetKineticEnergy() / MeV;
+      alls_volume = JRNameOfVolume(pre->GetPhysicalVolume());
+      alls_material = JRNameOfMaterial(pre);
+    }
+
+    if (post) {
+      const auto pos = post->GetPosition();
+      alls_post_x_cm = pos.x() / cm;
+      alls_post_y_cm = pos.y() / cm;
+      alls_post_z_cm = pos.z() / cm;
+      alls_post_t_ns = post->GetGlobalTime() / ns;
+
+      const auto dir = post->GetMomentumDirection();
+      alls_post_dir_x = dir.x();
+      alls_post_dir_y = dir.y();
+      alls_post_dir_z = dir.z();
+
+      alls_post_ke_MeV = post->GetKineticEnergy() / MeV;
+      alls_post_volume = JRNameOfVolume(post->GetPhysicalVolume());
+      alls_post_material = JRNameOfMaterial(post);
+
+      const G4VProcess* stepProc = post->GetProcessDefinedStep();
+      alls_step_process = stepProc ? std::string(stepProc->GetProcessName()) : std::string("NONE");
+    }
+
+    alls_edep_MeV = aStep->GetTotalEnergyDeposit() / MeV;
+    alls_step_length_cm = aStep->GetStepLength() / cm;
+    alls_track_length_cm = track->GetTrackLength() / cm;
+    alls_charge = def ? static_cast<float>(def->GetPDGCharge()) : 0.f;
+    alls_particle = def ? std::string(def->GetParticleName()) : std::string("NONE");
+
+    const G4VProcess* creator = track->GetCreatorProcess();
+    alls_creator = creator ? std::string(creator->GetProcessName()) : std::string("NONE");
+
+    AllSecondariesTree_Fill();
+  }
+
+
+  //JR EDIT BEGIN
+
+  // ===============================
+// JR: Michel photon birth capture
+// ===============================
+{
+  const G4Track* trk0 = aStep->GetTrack();
+  if (trk0) {
+
+    // Clear cache once per event
+    const int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+    if (evtID != g_birth_evt_latch) {
+      g_birth_evt_latch = evtID;
+      g_michelPhotonBirth.clear();
+      //g_michelPhotonFilled.clear();
+    }
+    
+    if (evtID != g_primary_birth_evt_latch) {
+  g_primary_birth_evt_latch = evtID;
+  g_primaryPhotonBirth.clear();
+}
+
+        if (evtID != g_secondary_e_birth_evt_latch) {
+      g_secondary_e_birth_evt_latch = evtID;
+      g_secondaryElectronPhotonBirth.clear();
+    }
+
+    if (evtID != g_all_secondary_birth_evt_latch) {
+      g_all_secondary_birth_evt_latch = evtID;
+      g_allSecondaryPhotonBirth.clear();
+      AllSecondaryPhotonsTree_ResetEvent(evtID);
+    }
+
+    // Only look at the Michel e± track (set in TrackingAction)
+    if (g_michel_trk >= 0 && trk0->GetTrackID() == g_michel_trk) {
+      // ---- DEBUG: confirm SteppingAction is seeing Michel track ----
+static int dbg_michel_steps = 0;
+/*
+if (dbg_michel_steps < 20) {
+  dbg_michel_steps++;
+  G4cout << "[DBG-MICHEL-STEP] evt="
+         << G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID()
+         << " michel_trk=" << g_michel_trk
+         << " thisTrack=" << trk0->GetTrackID()
+         << " pdg=" << trk0->GetDefinition()->GetPDGEncoding()
+         << " KE(MeV)=" << (trk0->GetKineticEnergy()/MeV)
+         << " t(ns)=" << (trk0->GetGlobalTime()/ns)
+         << G4endl;
+}
+*/
+      const int pdg = trk0->GetDefinition()->GetPDGEncoding();
+      if (std::abs(pdg) == 11) {
+
+        const auto* secs = aStep->GetSecondaryInCurrentStep();
+        // ---- DEBUG: do we see secondaries at all? ----
+static int dbg_secs = 0;
+
+/*
+if (dbg_secs < 20) {
+  dbg_secs++;
+  const int nsec = (secs ? (int)secs->size() : 0);
+  G4cout << "[DBG-MICHEL-SECS] evt="
+         << G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID()
+         << " michel_trk=" << g_michel_trk
+         << " nsec=" << nsec
+         << G4endl;
+}
+*/	
+	if (secs) {
+          for (auto* sec : *secs) {
+            
+            // ---- DEBUG: show first few secondaries types/creators ----
+static int dbg_sec_show = 0;
+
+/*
+if (dbg_sec_show < 40) {
+  dbg_sec_show++;
+  const int spdg = sec->GetDefinition()->GetPDGEncoding();
+  const G4VProcess* scp = sec->GetCreatorProcess();
+  const G4String screator = scp ? scp->GetProcessName() : "NONE";
+  G4cout << "[DBG-SEC] evt="
+         << G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID()
+         << " s_trk=" << sec->GetTrackID()
+         << " spdg=" << spdg
+         << " creator=" << screator
+         << G4endl;
+}
+*/		  
+	    if (!sec) continue;
+            if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+
+            const G4VProcess* cp = sec->GetCreatorProcess();
+            const G4String creator = cp ? cp->GetProcessName() : "NONE";
+            if (creator != "Cerenkov") continue;
+	//G4cout << "[DBG-CACHE] key(ptr)=" << sec << " trkID=" << sec->GetTrackID() << G4endl;
+            MichelPhotonStartInfo info;
+            info.evt       = evtID;
+            info.trk       = sec->GetTrackID();
+            info.parent    = trk0->GetTrackID();   // parent is the Michel e± track
+            info.pdg       = sec->GetDefinition()->GetPDGEncoding();
+            info.michel_trk= g_michel_trk;
+
+            const auto pos = sec->GetPosition();
+            info.sx_cm = pos.x()/cm;
+            info.sy_cm = pos.y()/cm;
+            info.sz_cm = pos.z()/cm;
+            info.st_ns = sec->GetGlobalTime()/ns;
+
+            const auto dir = sec->GetMomentumDirection();
+            info.dir_x = dir.x();
+            info.dir_y = dir.y();
+            info.dir_z = dir.z();
+
+            const G4double Eph = sec->GetTotalEnergy();
+            info.lambda_nm = (h_Planck * c_light / Eph) / nm;
+
+            info.creator = creator;
+
+            // Cache this photon's birth info until it ends / hits a PMT
+            g_michelPhotonBirth[sec] = info;
+          }
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
+// Secondary-electron photon birth capture
+// ============================================================
+{
+  const G4Track* trk0 = aStep->GetTrack();
+  if (trk0) {
+    const auto* def0 = trk0->GetDefinition();
+    const int pdg0 = def0 ? def0->GetPDGEncoding() : 0;
+
+    // Track only secondary electrons here (PDG = 11, parent > 0).
+    if (pdg0 == 11 && trk0->GetParentID() > 0) {
+      const auto* secs = aStep->GetSecondaryInCurrentStep();
+      if (secs) {
+        const int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+        for (auto* sec : *secs) {
+          if (!sec) continue;
+          if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+
+          const G4VProcess* cp = sec->GetCreatorProcess();
+          const G4String creator = cp ? cp->GetProcessName() : "NONE";
+          if (creator != "Cerenkov") continue;
+
+          SecondaryElectronPhotonStartInfo info;
+          info.evt       = evtID;
+          info.trk       = sec->GetTrackID();
+          info.parent    = trk0->GetTrackID();
+          info.pdg       = sec->GetDefinition()->GetPDGEncoding();
+          info.sec_e_trk = trk0->GetTrackID();
+
+          const auto pos = sec->GetPosition();
+          info.sx_cm = pos.x() / cm;
+          info.sy_cm = pos.y() / cm;
+          info.sz_cm = pos.z() / cm;
+          info.st_ns = sec->GetGlobalTime() / ns;
+
+          const auto dir = sec->GetMomentumDirection();
+          info.dir_x = dir.x();
+          info.dir_y = dir.y();
+          info.dir_z = dir.z();
+
+          const G4double Eph = sec->GetTotalEnergy();
+          info.lambda_nm = (h_Planck * c_light / Eph) / nm;
+
+          info.creator = creator;
+          g_secondaryElectronPhotonBirth[sec] = info;
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
+// All-primary-and-secondary photon birth capture
+// ============================================================
+{
+  const G4Track* trk0 = aStep->GetTrack();
+  if (trk0) {
+    const auto* def0 = trk0->GetDefinition();
+    const bool isOpticalParent =
+        (def0 == G4OpticalPhoton::OpticalPhotonDefinition());
+
+    // Immediate parent must be a real charged/neutral particle track, not
+    // another optical photon. This now intentionally includes the generated
+    // event primary as well as all non-optical secondary particles. Primary
+    // photons are identifiable downstream by parent_parent == 0 and
+    // parent_creator == "NONE".
+    if (!isOpticalParent) {
+      const auto* secs = aStep->GetSecondaryInCurrentStep();
+      if (secs) {
+        const int evtID = G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID();
+        const auto* parentPre = aStep->GetPreStepPoint();
+        const G4VProcess* parentCreator = trk0->GetCreatorProcess();
+
+        for (auto* sec : *secs) {
+          if (!sec) continue;
+          if (sec->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) continue;
+
+          const G4VProcess* cp = sec->GetCreatorProcess();
+          const G4String creator = cp ? cp->GetProcessName() : "NONE";
+          if (creator != "Cerenkov") continue;
+
+          AllSecondaryPhotonStartInfo info;
+          info.evt = evtID;
+          info.trk = sec->GetTrackID();
+          info.parent = trk0->GetTrackID();
+          info.parent_pdg = def0 ? def0->GetPDGEncoding() : 0;
+          info.parent_parent = trk0->GetParentID();
+          info.parent_step = trk0->GetCurrentStepNumber();
+          info.pdg = sec->GetDefinition()->GetPDGEncoding();
+          info.parent_ke_MeV = parentPre ? (parentPre->GetKineticEnergy() / MeV)
+                                         : (trk0->GetKineticEnergy() / MeV);
+
+          const auto pos = sec->GetPosition();
+          info.sx_cm = pos.x() / cm;
+          info.sy_cm = pos.y() / cm;
+          info.sz_cm = pos.z() / cm;
+          info.st_ns = sec->GetGlobalTime() / ns;
+
+          const auto dir = sec->GetMomentumDirection();
+          info.dir_x = dir.x();
+          info.dir_y = dir.y();
+          info.dir_z = dir.z();
+
+          const G4double Eph = sec->GetTotalEnergy();
+          info.lambda_nm = (h_Planck * c_light / Eph) / nm;
+
+          info.creator = std::string(creator);
+          info.parent_creator = parentCreator
+              ? std::string(parentCreator->GetProcessName())
+              : std::string("NONE");
+
+          g_allSecondaryPhotonBirth[sec] = info;
+        }
+      }
+    }
+  }
+}
+
+//JR EDIT END
+
+  // Not used:
+  //const G4Event* evt = G4RunManager::GetRunManager()->GetCurrentEvent();
+  //G4VPhysicalVolume* volume  = track->GetVolume();
+  //G4SDManager* SDman   = G4SDManager::GetSDMpointer();
+  //G4HCofThisEvent* HCE = evt->GetHCofThisEvent();
+
+  
+  // Debug for photon tracking
+  G4StepPoint* thePrePoint = aStep->GetPreStepPoint();
+  G4VPhysicalVolume* thePrePV = thePrePoint->GetPhysicalVolume();
+
+  G4StepPoint* thePostPoint = aStep->GetPostStepPoint();
+  G4VPhysicalVolume* thePostPV = thePostPoint->GetPhysicalVolume();
+
+  //G4OpBoundaryProcessStatus boundaryStatus=Undefined;
+  //static G4ThreadLocal G4OpBoundaryProcess* boundary=NULL;  //doesn't work and needs #include tls.hh from Geant4.9.6 and beyond
+  G4OpBoundaryProcess* boundary=NULL;
+  
+  //find the boundary process only once
+  if(!boundary){
+    G4ProcessManager* pm
+      = aStep->GetTrack()->GetDefinition()->GetProcessManager();
+    G4int nprocesses = pm->GetProcessListLength();
+    G4ProcessVector* pv = pm->GetProcessList();
+    G4int i;
+    for( i=0;i<nprocesses;i++){
+      if((*pv)[i]->GetProcessName()=="OpBoundary"){
+	boundary = (G4OpBoundaryProcess*)(*pv)[i];
+	break;
+      }
+    }
+  }
+
+  G4ParticleDefinition *particleType = track->GetDefinition();
+  if(particleType == G4OpticalPhoton::OpticalPhotonDefinition() && thePrePV && thePostPV){
+    
+    //JR EDIT BEGIN
+  
+
+  // ============================================================
+// JR: Michel photon finalization (PMT hit or photon termination)
+// ============================================================
+{
+  // Only care about photons we cached at creation time
+  auto it = g_michelPhotonBirth.find(track);
+  if (it != g_michelPhotonBirth.end()){
+
+  const MichelPhotonStartInfo& info = it->second;
+
+  // -------- Detect a PMT "hit" (best-effort from geometry) --------
+  int hitPMT = -1;
+
+  // You already established your touchable scheme works:
+  // hitPMT = 100*moduleCopy + pmtCopy (or your 10000 scheme).
+  // Keep the exact logic you already have working here.
+  //
+  // IMPORTANT: do NOT return early just because it isn't a PMT.
+  // We still want to record non-PMT terminations.
+
+  // Determine if this step looks like entering a PMT *now*
+  bool enteredPMT = false;
+  if (thePostPV) {
+    const std::string postName = thePostPV->GetName();
+    enteredPMT = (postName == "pmt");  // you’re using pmt at depth=0
+  }
+
+  if (enteredPMT) {
+    const auto* post = aStep->GetPostStepPoint();
+    const auto* touch = post ? post->GetTouchable() : nullptr;
+
+    if (touch && touch->GetHistoryDepth() >= 2) {
+      // From your dump:
+      // d=0 pmt copy=pmtCopy
+      // d=2 WCMultiPMT copy=moduleCopy
+      const int pmtCopy    = touch->GetCopyNumber(0);
+      const int moduleCopy = touch->GetCopyNumber(2);
+
+      // Match what you decided earlier. Your prints showed hitPMT like 7810 etc.
+      hitPMT = 100 * moduleCopy + pmtCopy;
+    }
+  }
+
+  // -------- Determine if photon is terminating on THIS step --------
+  const bool killedNow =
+      (track->GetTrackStatus() == fStopAndKill) ||
+      (track->GetTrackStatus() == fStopAndKill);
+
+  // If it neither hit a PMT nor got killed, don’t finalize yet.
+  if (hitPMT >= 0 || !killedNow) {
+
+  // -------- Final boundary + end process (best effort) --------
+  const std::string endBoundary = thePostPV ? thePostPV->GetName() : "NONE";
+
+  const G4VProcess* endProc = nullptr;
+  if (aStep->GetPostStepPoint()) {
+    endProc = aStep->GetPostStepPoint()->GetProcessDefinedStep();
+  }
+  const std::string endProcName = endProc ? endProc->GetProcessName() : "NONE";
+
+  // -------- Fill michel_photons tree from cached birth + end info --------
+  mcp_evt        = info.evt;
+  mcp_trk        = track->GetTrackID();
+  mcp_parent     = track->GetParentID();
+  mcp_pdg        = 0; // optical photon
+  mcp_michel_trk = info.michel_trk;
+
+  mcp_sx_cm = info.sx_cm;
+  mcp_sy_cm = info.sy_cm;
+  mcp_sz_cm = info.sz_cm;
+  mcp_st_ns = info.st_ns;
+
+  mcp_dir_x = info.dir_x;
+  mcp_dir_y = info.dir_y;
+  mcp_dir_z = info.dir_z;
+
+  mcp_lambda_nm = info.lambda_nm;
+
+  mcp_hit_pmt     = hitPMT;
+  mcp_end_boundary = endBoundary;
+  mcp_end_process  = endProcName;
+  mcp_creator      = info.creator;
+
+  MichelPhotonsTree_Fill();
+
+  // CRITICAL: erase from birth map so this photon can only be filled once.
+  // This also fixes the pointer-reuse problem that was killing your stats.
+  g_michelPhotonBirth.erase(it);
+}  
+}
+}
+
+
+// ============================================================
+// Secondary-electron photon finalization (PMT hit or termination)
+// ============================================================
+{
+  auto itse = g_secondaryElectronPhotonBirth.find(track);
+  if (itse != g_secondaryElectronPhotonBirth.end()) {
+
+    const SecondaryElectronPhotonStartInfo& info = itse->second;
+
+    int hitPMT = -1;
+    bool enteredPMT = false;
+    if (thePostPV) {
+      const std::string postName = thePostPV->GetName();
+      enteredPMT = (postName == "pmt");
+    }
+
+    if (enteredPMT) {
+      const auto* post = aStep->GetPostStepPoint();
+      const auto* touch = post ? post->GetTouchable() : nullptr;
+      if (touch && touch->GetHistoryDepth() >= 2) {
+        const int pmtCopy    = touch->GetCopyNumber(0);
+        const int moduleCopy = touch->GetCopyNumber(2);
+        hitPMT = 100 * moduleCopy + pmtCopy;
+      }
+    }
+
+    const bool killedNow =
+        (track->GetTrackStatus() == fStopAndKill) ||
+        (track->GetTrackStatus() == fKillTrackAndSecondaries);
+
+    if (hitPMT >= 0 || killedNow) {
+      sep_evt       = info.evt;
+      sep_trk       = track->GetTrackID();
+      sep_parent    = info.parent;
+      sep_pdg       = info.pdg;
+      sep_sec_e_trk = info.sec_e_trk;
+
+      sep_sx_cm = info.sx_cm;
+      sep_sy_cm = info.sy_cm;
+      sep_sz_cm = info.sz_cm;
+      sep_st_ns = info.st_ns;
+
+      sep_dir_x = info.dir_x;
+      sep_dir_y = info.dir_y;
+      sep_dir_z = info.dir_z;
+
+      sep_lambda_nm   = info.lambda_nm;
+      sep_hit_pmt     = hitPMT;
+      sep_end_boundary = thePostPV ? thePostPV->GetName() : "NONE";
+
+      const G4VProcess* endProc =
+          aStep->GetPostStepPoint() ? aStep->GetPostStepPoint()->GetProcessDefinedStep() : nullptr;
+      sep_end_process = endProc ? endProc->GetProcessName() : "NONE";
+      sep_creator     = info.creator;
+
+      SecondaryElectronPhotonsTree_Fill();
+      g_secondaryElectronPhotonBirth.erase(itse);
+    }
+  }
+}
+
+
+// ============================================================
+// All-primary-and-secondary photon finalization
+// PMT entry, PE flag, termination
+// ============================================================
+{
+  auto itall = g_allSecondaryPhotonBirth.find(track);
+  if (itall != g_allSecondaryPhotonBirth.end()) {
+    AllSecondaryPhotonStartInfo& info = itall->second;
+
+    if (thePostPV) {
+      const std::string postName = thePostPV->GetName();
+      const std::string preName = thePrePV ? std::string(thePrePV->GetName()) : std::string("NONE");
+      if (info.hit_pmt < 0 && JRIsLocalPMTVolumeName(postName) && preName != "pmt") {
+        info.hit_pmt = JRPMTIDFromStep(aStep);
+        info.hit_volume = postName;
+
+        const auto* post = aStep->GetPostStepPoint();
+        if (post) {
+          const auto hitPos = post->GetPosition();
+          info.hit_x_cm = hitPos.x() / cm;
+          info.hit_y_cm = hitPos.y() / cm;
+          info.hit_z_cm = hitPos.z() / cm;
+          info.hit_t_ns = post->GetGlobalTime() / ns;
+        }
+      }
+    }
+
+    const bool killedNow =
+        (track->GetTrackStatus() == fStopAndKill) ||
+        (track->GetTrackStatus() == fKillTrackAndSecondaries);
+
+    if (killedNow) {
+      AllSecondaryPhotonsTree_ResetVars();
+
+      asph_evt = info.evt;
+      asph_trk = track->GetTrackID();
+      asph_parent = info.parent;
+      asph_parent_pdg = info.parent_pdg;
+      asph_parent_parent = info.parent_parent;
+      asph_parent_step = info.parent_step;
+      asph_pdg = info.pdg;
+      asph_parent_ke_MeV = info.parent_ke_MeV;
+
+      asph_sx_cm = info.sx_cm;
+      asph_sy_cm = info.sy_cm;
+      asph_sz_cm = info.sz_cm;
+      asph_st_ns = info.st_ns;
+      asph_dir_x = info.dir_x;
+      asph_dir_y = info.dir_y;
+      asph_dir_z = info.dir_z;
+      asph_lambda_nm = info.lambda_nm;
+
+      asph_hit_pmt = info.hit_pmt;
+      asph_hit_x_cm = info.hit_x_cm;
+      asph_hit_y_cm = info.hit_y_cm;
+      asph_hit_z_cm = info.hit_z_cm;
+      asph_hit_t_ns = info.hit_t_ns;
+      asph_hit_volume = info.hit_volume;
+
+      int pePMT = -1;
+      float peTime = 0.f;
+      float peLambda = 0.f;
+      if (AllSecondaryPhotonsTree_GetPE(info.evt, track->GetTrackID(), pePMT, peTime, peLambda)) {
+        asph_made_pe = 1;
+        // Store pe_pmt in the same convention as hit_pmt.  The WCSD PE
+        // hook now passes this convention directly; if both are available,
+        // prefer the PMT-entry value recorded in this stepping action so the
+        // two branches are exactly consistent for PE photons.
+        asph_pe_pmt = (info.hit_pmt >= 0) ? info.hit_pmt : pePMT;
+        asph_pe_time_ns = peTime;
+        asph_pe_lambda_nm = peLambda;
+      }
+
+      const auto* post = aStep->GetPostStepPoint();
+      if (post) {
+        const auto endPos = post->GetPosition();
+        asph_end_x_cm = endPos.x() / cm;
+        asph_end_y_cm = endPos.y() / cm;
+        asph_end_z_cm = endPos.z() / cm;
+        asph_end_t_ns = post->GetGlobalTime() / ns;
+        asph_end_process = post->GetProcessDefinedStep()
+            ? std::string(post->GetProcessDefinedStep()->GetProcessName())
+            : std::string("NONE");
+      }
+
+      asph_end_status = static_cast<int>(track->GetTrackStatus());
+      asph_end_boundary = thePostPV ? std::string(thePostPV->GetName()) : std::string("NONE");
+      asph_creator = info.creator;
+      asph_parent_creator = info.parent_creator;
+
+      if (asph_hit_pmt < 0 && asph_pe_pmt >= 0) asph_hit_pmt = asph_pe_pmt;
+
+      AllSecondaryPhotonsTree_Fill();
+      g_allSecondaryPhotonBirth.erase(itall);
+    }
+  }
+}
+
+
+// ============================================================
+// JR: Primary photon finalization (PMT hit or photon termination)
+// ============================================================
+{
+  auto itp = g_primaryPhotonBirth.find(track);
+  if (itp != g_primaryPhotonBirth.end()) {
+
+    const PrimaryPhotonStartInfo& info = itp->second;
+
+    int hitPMT = -1;
+
+    bool enteredPMT = false;
+    if (thePostPV) {
+      const std::string postName = thePostPV->GetName();
+      enteredPMT = (postName == "pmt");
+    }
+
+    if (enteredPMT) {
+      const auto* post = aStep->GetPostStepPoint();
+      const auto* touch = post ? post->GetTouchable() : nullptr;
+
+      if (touch && touch->GetHistoryDepth() >= 2) {
+        const int pmtCopy    = touch->GetCopyNumber(0);
+        const int moduleCopy = touch->GetCopyNumber(2);
+
+        hitPMT = 100 * moduleCopy + pmtCopy;
+      }
+    }
+
+    const bool killedNow =
+        (track->GetTrackStatus() == fStopAndKill) ||
+        (track->GetTrackStatus() == fKillTrackAndSecondaries);
+
+    if (hitPMT >= 0 || killedNow) {
+
+      a_evt = info.evt;
+     // a_trk = info.trk;
+      a_trk = track->GetTrackID();
+      a_par = info.par;
+      a_pdg = info.pdg;
+      a_muAncestorID = info.muAncestorID;
+
+      a_edir_x = info.edir_x;
+      a_edir_y = info.edir_y;
+      a_edir_z = info.edir_z;
+
+      a_ex_cm = info.ex_cm;
+      a_ey_cm = info.ey_cm;
+      a_ez_cm = info.ez_cm;
+      a_et_ns = info.et_ns;
+
+      a_Estart_MeV = info.Estart_MeV;
+      a_muKE_MeV   = info.muKE_MeV;
+      a_muStep     = info.muStep;
+
+      a_lambda_nm = info.lambda_nm;
+      a_creator   = info.creator;
+
+      a_hit_pmt = hitPMT;
+      a_end_boundary = thePostPV ? thePostPV->GetName() : "NONE";
+
+      const G4VProcess* endProc =
+          aStep->GetPostStepPoint() ? aStep->GetPostStepPoint()->GetProcessDefinedStep() : nullptr;
+      a_end_process = endProc ? endProc->GetProcessName() : "NONE";
+
+      AllPhotonsTree_Fill();
+      g_primaryPhotonBirth.erase(itp);
+    }
+  }
+}
+
+/*
+    // ============================================================
+// JR: Michel photon finalization (PMT hit or photon termination)
+// ============================================================
+{
+  // Only care about photons we cached at creation time
+  const int trkID = track->GetTrackID();
+  if (g_michelPhotonFilled.find(track) != g_michelPhotonFilled.end()) return;
+
+  auto it = g_michelPhotonBirth.find(track);
+  if (it != g_michelPhotonBirth.end()) {
+
+  // -------- Detect a PMT "hit" (best-effort from geometry) --------
+int hitPMT = -1;
+
+// Require valid PVs
+if (thePrePV && thePostPV) {
+  const G4String preName  = thePrePV->GetName();
+  const G4String postName = thePostPV->GetName();
+
+  // Only treat as a PMT hit when the photon ENTERS a "pmt" volume
+  // (avoids pmt->pmt spam and internal steps)
+  const bool enteredPMT = (postName == "pmt") && (preName != "pmt");
+
+  if (enteredPMT) {
+    int pmt_in_module = -1;
+    int module_copy   = -1;
+
+    const auto* postPoint = aStep->GetPostStepPoint();
+    const auto* touch = postPoint ? postPoint->GetTouchable() : nullptr;
+
+    if (touch) {
+      // Walk the touchable history to find both the inner PMT copy and the module copy
+      for (int d = 0; d <= touch->GetHistoryDepth(); ++d) {
+        const auto* vol = touch->GetVolume(d);
+        if (!vol) continue;
+
+        const G4String nm = vol->GetName();
+
+        if (nm == "pmt") {
+          pmt_in_module = touch->GetCopyNumber(d);
+        } else if (nm == "WCMultiPMT") {
+          module_copy = touch->GetCopyNumber(d);
+        }
+      }
+
+      // TEMP unique ID: module*100 + pmtIndex (good enough for now)
+      if (pmt_in_module >= 0) {
+        hitPMT = (module_copy >= 0) ? (module_copy * 100 + pmt_in_module)
+                                    : pmt_in_module;
+      }
+	
+      // Small debug dump for first few PMT entries
+      static int dumped = 0;
+      if (dumped < 5) {
+        G4cout << "[MICHEL-PMT] evt="
+               << (G4RunManager::GetRunManager()->GetCurrentEvent()
+                     ? G4RunManager::GetRunManager()->GetCurrentEvent()->GetEventID()
+                     : -1)
+               << " photonTrk=" << track->GetTrackID()
+               << " pre=" << preName
+               << " post=" << postName
+               << " moduleCopy=" << module_copy
+               << " pmtCopy=" << pmt_in_module
+               << " hitPMT=" << hitPMT
+               << G4endl;
+
+        G4cout << "[TOUCH] depth=" << touch->GetHistoryDepth()
+               << " trk=" << track->GetTrackID() << G4endl;
+        for (int d = 0; d <= touch->GetHistoryDepth(); ++d) {
+          const auto* v = touch->GetVolume(d);
+          if (!v) continue;
+          G4cout << "  d=" << d
+                 << " name=" << v->GetName()
+                 << " copy=" << touch->GetCopyNumber(d)
+                 << G4endl;
+        }
+        dumped++;
+      }
+      
+    }
+  }
+}
+
+// At this point hitPMT is either -1 (no PMT entry) or our derived ID.
+// Don't return here — just leave hitPMT=-1 if it wasn't a PMT entry.
+// Your finalization code below should store hitPMT and end_boundary/process accordingly.
+
+
+    // -------- Detect a PMT "hit" (best-effort from geometry) --------
+    // In WCSim, PV names often contain "WCPMT" / "PMT" depending on geometry
+    int hitPMT = -1;
+    if (thePostPV) {
+      const std::string postName = thePostPV->GetName();
+      const int copyNo = thePostPV->GetCopyNo();
+
+     // accept either "pmt" or WCMultiPMT (you’re seeing both)
+bool isPMT = (postName == "pmt") || (postName == "WCMultiPMT");
+if (!isPMT) return;
+
+int hitPMT = copyNo;   // for your geometry this is what you’ve been printing as "copy="
+
+const auto* post = aStep->GetPostStepPoint();
+const auto* touch = post->GetTouchable();
+static int dumped = 0;
+if (dumped < 5) {
+  G4cout << "[TOUCH] depth=" << touch->GetHistoryDepth()
+         << " trk=" << track->GetTrackID() << G4endl;
+  for (int d = 0; d <= touch->GetHistoryDepth(); ++d) {
+    G4cout << "  d=" << d
+           << " name=" << touch->GetVolume(d)->GetName()
+           << " copy=" << touch->GetCopyNumber(d)
+           << G4endl;
+  }
+  dumped++;
+} 
+   }
+
+    
+
+//G4cout << "[DBG-FIND]  key(ptr)=" << track << " trkID=" << track->GetTrackID() << G4endl;
+    // -------- Determine if photon is ending this step --------
+    // We fill if it:
+    //   (a) enters a PMT volume (hitPMT>=0), OR
+    //   (b) is being killed (Absorption, Boundary kill, etc.)
+    const bool killedNow = (track->GetTrackStatus() == fStopAndKill);
+
+    if (hitPMT >= 0 || killedNow) {
+
+      const auto& info = it->second;
+
+
+       if (hitPMT >= 0 && info.evt < 10) {
+  G4cout << "[MICHEL-PMT] evt=" << info.evt
+         << " photonTrk=" << trkID
+         << " postPV=" << thePostPV->GetName()
+         << " copy=" << hitPMT
+         << G4endl;
+}
+
+      // Only proceed if it's a michel photon we cached
+
+      // ---- Fill your michel_photons branches (mcp_*) ----
+      mcp_evt        = info.evt;
+      //mcp_trk        = info.trk;
+      mcp_trk = track->GetTrackID();   // real, nonzero
+      mcp_parent     = info.parent;
+      mcp_pdg        = info.pdg;
+      mcp_michel_trk = info.michel_trk;
+
+      mcp_sx_cm = info.sx_cm;
+      mcp_sy_cm = info.sy_cm;
+      mcp_sz_cm = info.sz_cm;
+      mcp_st_ns = info.st_ns;
+
+      mcp_dir_x = info.dir_x;
+      mcp_dir_y = info.dir_y;
+      mcp_dir_z = info.dir_z;
+
+      mcp_lambda_nm = info.lambda_nm;
+
+      mcp_hit_pmt = hitPMT;
+
+      // Where it ended / what boundary it was at
+      mcp_end_boundary = (thePostPV ? thePostPV->GetName() : "NONE");
+
+      // Process that limited this step (Absorption, OpBoundary, etc.)
+      const G4VProcess* endP = thePostPoint ? thePostPoint->GetProcessDefinedStep() : nullptr;
+      mcp_end_process = endP ? endP->GetProcessName() : "NONE";
+
+      // Creator stored from birth cache (should be "Cerenkov")
+      mcp_creator = info.creator;
+
+      MichelPhotonsTree_Fill();
+
+      // Remove so we do not double-fill this photon
+      g_michelPhotonFilled.insert(track);
+      g_michelPhotonBirth.erase(it);
+    }
+  }
+}
+*/
+//JR EDIT END
+
+    if( (thePrePV->GetName().find("MultiPMT") != std::string::npos) &&
+	(thePostPV->GetName().find("vessel") != std::string::npos) )
+      n_photons_through_mPMTLV++;
+    
+    if( (thePostPV->GetName().find("container") != std::string::npos) &&
+	(thePrePV->GetName().find("vessel") != std::string::npos))
+      n_photons_through_acrylic++;
+    
+    if( (thePrePV->GetName().find("container") != std::string::npos) )
+      n_photons_through_gel++;
+
+    if( (thePrePV->GetName().find("container") != std::string::npos) &&
+	(thePostPV->GetName().find("inner") != std::string::npos) )
+      n_photons_on_blacksheet++;
+
+    if( (thePrePV->GetName().find("container") != std::string::npos) &&
+	(thePostPV->GetName().find("pmt") != std::string::npos) )
+      n_photons_on_smallPMT++;
+	
+
+    /*
+    if( (thePrePV->GetName().find("pmt") != std::string::npos)){
+      G4cout << "Photon between " << thePrePV->GetName() <<
+	" and " << thePostPV->GetName() << " because " << 
+	thePostPoint->GetProcessDefinedStep()->GetProcessName() << 
+	" and boundary status: " <<  boundary->GetStatus() << " with track status " << track->GetTrackStatus() << G4endl;
+      
+	}*/
+
+
+
+    if(track->GetTrackStatus() == fStopAndKill){
+      if(boundary->GetStatus() == NoRINDEX){
+	G4cout << "Optical photon is killed because of missing refractive index in either " << thePrePoint->GetMaterial()->GetName() << " or " << thePostPoint->GetMaterial()->GetName() <<
+	  " (transition from " << thePrePV->GetName() << " to " << thePostPV->GetName() << ")" <<
+	  " : could also be caused by Overlaps with volumes with logicalBoundaries." << G4endl;
+	
+      }
+      /* Debug :  
+      if( (thePrePV->GetName().find("PMT") != std::string::npos) ||
+	  (thePrePV->GetName().find("pmt") != std::string::npos)){
+	
+	if(boundary->GetStatus() != StepTooSmall){
+	  //	if(thePostPoint->GetProcessDefinedStep()->GetProcessName() != "Transportation")
+	  G4cout << "Killed photon between " << thePrePV->GetName() <<
+	    " and " << thePostPV->GetName() << " because " << 
+	    thePostPoint->GetProcessDefinedStep()->GetProcessName() << 
+	    " and boundary status: " <<  boundary->GetStatus() <<
+	    G4endl;
+	}
+	}	*/
+      
+    }
+  }
+
+
+
+}
+
+
+G4int WCSimSteppingAction::G4ThreeVectorToWireTime(G4ThreeVector *pos3d,
+						    G4ThreeVector lArPos,
+						    G4ThreeVector start,
+						    G4int i)
+{
+  G4double x0 = start[0]-lArPos[0];
+  G4double y0 = start[1]-lArPos[1];
+//   G4double y0 = 2121.3;//mm
+  G4double z0 = start[2]-lArPos[2];
+
+  G4double dt=0.8;//mm
+//   G4double midt = 2651.625;
+  G4double pitch = 3;//mm
+//   G4double midwir = 1207.10;
+  G4double c45 = 0.707106781;
+  G4double s45 = 0.707106781;
+
+  G4double w1;
+  G4double w2;
+  G4double t;
+
+//   G4double xField(0.);
+//   G4double yField(0.);
+//   G4double zField(0.);
+
+//   if(detector->getElectricFieldDistortion())
+//     {
+//       Distortion(pos3d->getX(),
+// 		 pos3d->getY());
+      
+//       xField = ret[0];
+//       yField = ret[1];
+//       zField = pos3d->getZ();
+      
+//       w1 = (int)(((zField+z0)*c45 + (x0-xField)*s45)/pitch); 
+//       w2 = (int)(((zField+z0)*c45 + (x0+xField)*s45)/pitch); 
+//       t = (int)(yField+1);
+
+//       //G4cout<<" x orig "<<pos3d->getX()<<" y orig "<<(pos3d->getY()+y0)/dt<<G4endl;
+//       //G4cout<<" x new "<<xField<<" y new "<<yField<<G4endl;
+//     }
+//   else 
+//     {
+      
+  w1 = (int) (((pos3d->getZ()+z0)*c45 + (x0-pos3d->getX())*s45)/pitch); 
+  w2 = (int)(((pos3d->getZ()+z0)*c45 + (x0+pos3d->getX())*s45)/pitch); 
+  t  = (int)((pos3d->getY()+y0)/dt +1);
+//     }
+
+  if (i==0)
+    return (int)w1;
+  else if (i==1)
+    return (int)w2;
+  else if (i==2)
+    return (int)t;
+  else return 0;
+} 
+
+
+void WCSimSteppingAction::Distortion(G4double /*x*/,G4double /*y*/)
+{
+ 
+//   G4double theta,steps,yy,y0,EvGx,EvGy,EField,velocity,tSample,dt;
+//   y0=2121.3;//mm
+//   steps=0;//1 mm steps
+//   tSample=0.4; //micros
+//   dt=0.8;//mm
+//   LiquidArgonMedium medium;  
+//   yy=y;
+//   while(y<y0 && y>-y0 )
+//     {
+//       EvGx=FieldLines(x,y,1);
+//       EvGy=FieldLines(x,y,2);
+//       theta=atan(EvGx/EvGy);
+//       if(EvGy>0)
+// 	{
+// 	  x+=sin(theta);
+// 	  y+=cos(theta);
+// 	}
+//       else
+// 	{
+// 	  y-=cos(theta);
+// 	  x-=sin(theta);
+// 	}
+//       EField=sqrt(EvGx*EvGx+EvGy*EvGy);//kV/mm
+//       velocity=medium.DriftVelocity(EField*10);// mm/microsec
+//       steps+=1/(tSample*velocity);
+
+//       //G4cout<<" step "<<steps<<" x "<<x<<" y "<<y<<" theta "<<theta<<" Gx "<<eventaction->Gx->Eval(x,y)<<" Gy "<<eventaction->Gy->Eval(x,y)<<" EField "<<EField<<" velocity "<<velocity<<G4endl;
+//     }
+
+//   //numbers
+//   //EvGx=FieldLines(0,1000,1);
+//   //EvGy=FieldLines(0,1000,2);
+//   //EField=sqrt(EvGx*EvGx+EvGy*EvGy);//kV/mm
+//   //velocity=medium.DriftVelocity(EField*10);// mm/microsec
+//   //G4double quenching;
+//   //quenching=medium.QuenchingFactor(2.1,EField*10);
+//   //G4cout<<" Gx "<<EvGx<<" Gy "<<EvGy<<" EField "<<EField<<" velocity "<<velocity<<" quenching "<<quenching<<G4endl;
+
+
+  //ret[0]=5;
+//   if(yy>0)
+//     ret[1]=2*y0/dt -steps;
+//   else
+//     ret[1]=steps; 
+}
+
+
+double WCSimSteppingAction::FieldLines(G4double /*x*/,G4double /*y*/,G4int /*coord*/)
+{ //0.1 kV/mm = field
+  //G4double Radius=302;//mm
+//   G4double Radius=602;//mm
+//   if(coord==1) //x coordinate
+//     return  (0.1*(2*Radius*Radius*x*abs(y)/((x*x+y*y)*(x*x+y*y))));
+//   else //y coordinate
+//     return 0.1*((abs(y)/y)*(1-Radius*Radius/((x*x+y*y)*(x*x+y*y))) + abs(y)*(2*Radius*Radius*y/((x*x+y*y)*(x*x+y*y))));
+  return 0;
+}

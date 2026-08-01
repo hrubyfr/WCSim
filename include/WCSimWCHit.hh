@@ -2,7 +2,7 @@
 #define WCSimWCHit_h 1
 
 #include "WCSimEnumerations.hh"
-
+#include <vector>
 #include "G4VHit.hh"
 #include "G4THitsCollection.hh"
 #include "G4Allocator.hh"
@@ -16,6 +16,15 @@
 
 class WCSimWCHit : public G4VHit
 {
+
+ //JR BEGIN EDIT
+ private:
+  std::vector<float> fCosInc;   // cos(incidence angle) per PE
+public:
+  void AddCosInc(float x) { fCosInc.push_back(x); }
+  const std::vector<float>& GetCosInc() const { return fCosInc; }
+ //JR END EDIT
+
  public:
   
   WCSimWCHit();
