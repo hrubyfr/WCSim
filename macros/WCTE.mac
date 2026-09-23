@@ -160,11 +160,11 @@
 # for a full list of /gps/ commands see:
 # https://geant4-userdoc.web.cern.ch/UsersGuides/ForApplicationDeveloper/html/GettingStarted/generalParticleSource.html
 # https://geant4-userdoc.web.cern.ch/UsersGuides/ForApplicationDeveloper/html/Control/AllResources/Control/UIcommands/_gps_.html
-/mygen/generator gps
-/gps/particle e-
-/gps/energy 500 MeV
-/gps/direction -1 0 0
-/gps/position 165 0 0
+#/mygen/generator gps
+#/gps/particle e-
+#/gps/energy 500 MeV
+#/gps/direction -1 0 0
+#/gps/position 165 0 0
 
 # Or you can use the laser option
 # This is equivalent to the gps command, except that the gps particle energies are saved ignoring their mass
@@ -196,7 +196,7 @@
 ## Based on Reyna model for sea level cosmic muons, see https://arxiv.org/abs/hep-ph/0604145 
 ## Takes only the MEAN energy of the reyna model, which is not the most common energy
 ## Muons are generated according to this flux and their position is extrapolated outside the tank
-#/mygen/generator cosmics
+/mygen/generator cosmics
 #/mygen/cosmicsfile data/WCTE_cosmics.dat
 
 ##################
@@ -230,6 +230,6 @@
 #/WCSimIO/Timer false
 
 #/WCSim/random/seed 20230628
-/run/beamOn 1
+/run/beamOn 1000
 #exit
 

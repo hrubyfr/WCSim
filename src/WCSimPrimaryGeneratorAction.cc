@@ -1,4 +1,8 @@
 #include "WCSimPrimaryGeneratorAction.hh"
+#include "CLHEP/Units/SystemOfUnits.h"
+#include "TMath.h"
+#include "TRandom.h"
+#include <cmath>
 
 #ifdef WCSIM_HEPMC3_ENABLED
 #include "HepMC3/FourVector.h"
@@ -166,6 +170,54 @@ WCSimPrimaryGeneratorAction::WCSimPrimaryGeneratorAction(
 
   // Time units for vertices
   fTimeUnit=CLHEP::nanosecond;
+}
+
+void WCSimPrimaryGeneratorAction::Create_cosmics_histogram_wcte(){
+	altCosmics = myDetector->GetWCIDHeight();
+
+	G4cout << G4endl <<  "WCTE geometry found, no need to look for a file..." << G4endl << G4endl;
+
+	G4cout << "altCosmics : " << altCosmics << G4endl;
+	G4cout << "Cosmics data file " << cosmicsFileName << " found" << G4endl;
+	string line;
+	vector<string> token(1);
+
+	double binCos;
+	//double cosThetaMean, cosThetaMin, cosThetaMax;
+	//double phiMean, phiMin, phiMax;
+	double flux;
+
+	hFluxEnergyCosmics = new TH2D("hFluxEnergyCosmics", "WCTE flux", 100, 0, 1, 10000, 0, 1000);
+	hFluxEnergyCosmics->GetXaxis()->SetTitle("cos #theta");
+	hFluxEnergyCosmics->GetYaxis()->SetTitle("Energy [GeV]");
+	hFluxEnergyCosmics->SetDirectory(0);
+
+
+	for (int i = 0; i < 100; i++){
+		binCos = i + 1;
+		auto theta = acos(i/100.0);
+		for (int j = 0; j < 10000; j++){
+			double momentum = j / 10.0;
+			auto momentum_bin = j + 1;
+			
+			auto zeta = cos(theta) * momentum;
+			auto vertical_flux = ReynaParameters::c0 * pow(zeta, -1 * (ReynaParameters::c1 +
+										   ReynaParameters::c2 * log(zeta) + 
+										   ReynaParameters::c3 * pow(log(zeta), 2) + 
+										   ReynaParameters::c4 * pow(log(zeta), 3)));
+
+			flux = pow(cos(theta), 3) * vertical_flux;
+			
+			hFluxEnergyCosmics->SetBinContent(binCos, momentum_bin, flux);
+
+		}
+	}
+
+
+	TFile *file = new TFile("cosmicflux.root","RECREATE");
+	hFluxEnergyCosmics->Write();
+	file->Close();
+
 }
 
 
@@ -1205,7 +1257,98 @@ void WCSimPrimaryGeneratorAction::GeneratePrimaries(G4Event* anEvent)
     SetNvtxs(nParticles);
 
   } else if (useCosmics) {
+    
+    if (myDetector->GetIsNuPrismBeamTest_16cShort()){
+	G4cout << "WCTE geometry detected, simulating sea level cosmic muons..." << G4endl;
+	if (hFluxEnergyCosmics == nullptr)
+		Create_cosmics_histogram_wcte();
+    //////////////////
+    // DEBUG PRINTS
+    G4cout << G4endl;
+    G4cout << "COSMYMYMATICS" << G4endl;
+    G4cout << "#############" << G4endl;
+    //////////////////
 
+    // get muon direction
+    double phiMuon, cosThetaMuon;
+    G4double momentum = 0;
+    while((int)(momentum) == 0){
+      hFluxEnergyCosmics->GetRandom2(cosThetaMuon, momentum);
+      phiMuon = gRandom-> Uniform(0, TMath::TwoPi());
+    }
+    momentum = momentum * GeV;
+    // DEBUG
+
+    G4cout << G4endl;
+    G4cout << "momentum and direction angle chosen using gRandom2, " << G4endl;
+    G4cout << "Momentum: " << momentum << endl;
+    G4cout << G4endl;
+
+    G4ThreeVector dir(0,0,0);
+    dir.setRThetaPhi(-1,acos(cosThetaMuon),phiMuon);
+
+    // generate point uniformly distributed inside the ID cylinder
+    double detHalfHeight = 0.5*myDetector->GetWCIDHeight();
+    double detRadius     = 0.5*myDetector->GetWCIDDiameter();
+    double posInCylR     = sqrt(gRandom->Uniform())*detRadius;
+    double posInCylPhi   = gRandom->Uniform(TMath::TwoPi());
+    double posInCylZ     = gRandom->Uniform(-1.*detHalfHeight,detHalfHeight);
+
+    G4ThreeVector posInCyl(0,0,0);
+    posInCyl.setX(posInCylR*cos(posInCylPhi));
+    posInCyl.setY(posInCylR*sin(posInCylPhi));
+    posInCyl.setZ(posInCylZ);
+
+    if (myDetector->GetIsNuPrism())
+    {
+      dir.rotateX(-90.*deg);
+      posInCyl.rotateX(-90.*deg);
+    }
+
+    // generate muon at the intersection
+    // between an sphere with radius = altComics
+    // and a line made with the muon direction
+    // and the generated point inside the ID cylinder
+    double a = dir.mag2();
+    double b = -2.*posInCyl.dot(dir);
+    double c = posInCyl.mag2()-altCosmics*altCosmics;
+    double t = (sqrt(b*b-4.*c*a)-b)/(2.*a);
+
+    G4ThreeVector vtx(0,0,0);
+    vtx.setX(posInCyl.x()-t*dir.x());
+    vtx.setY(posInCyl.y()-t*dir.y());
+    vtx.setZ(posInCyl.z()-t*dir.z());
+
+    int pdgid = 13; // MUON
+    particleGun->SetParticleDefinition(particleTable->FindParticle(pdgid));
+    G4double mass =particleGun->GetParticleDefinition()->GetPDGMass();
+
+    energy = sqrt(pow(momentum, 2) + pow(mass, 2));
+    G4double ekin = energy - mass;
+
+    //////////////////
+    // DEBUG PRINTS
+    G4cout << G4endl;
+    G4cout << "Generated at position : " << vtx.getX()/m << "m "
+           << vtx.getY()/m << "m "
+           << vtx.getZ()/m << "m " << G4endl;
+    G4cout << "phi : " << phiMuon << " cosTheta : " << cosThetaMuon << G4endl;
+    G4cout << "E : " << energy/GeV << " GeV" << G4endl;
+    G4cout << G4endl;
+    //////////////////
+
+    SetVtx(vtx);
+    SetBeamEnergy(energy);
+    SetBeamDir(dir);
+    SetBeamPDG(pdgid);
+
+    particleGun->SetParticleEnergy(ekin);
+    particleGun->SetParticlePosition(vtx);
+    particleGun->SetParticleMomentumDirection(dir);
+    particleGun->GeneratePrimaryVertex(anEvent);;
+
+    }
+    else {	
     if (hFluxCosmics == nullptr) 
       Create_cosmics_histogram();
 
@@ -1286,7 +1429,7 @@ void WCSimPrimaryGeneratorAction::GeneratePrimaries(G4Event* anEvent)
     particleGun->SetParticlePosition(vtx);
     particleGun->SetParticleMomentumDirection(dir);
     particleGun->GeneratePrimaryVertex(anEvent);
-
+    }
   }
   else if (useRadioactiveEvt)
     {

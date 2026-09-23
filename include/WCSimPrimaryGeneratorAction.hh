@@ -1,6 +1,7 @@
 #ifndef WCSimPrimaryGeneratorAction_h
 #define WCSimPrimaryGeneratorAction_h
 
+#include "G4Types.hh"
 #include "G4VUserPrimaryGeneratorAction.hh"
 #include "G4ThreeVector.hh"
 #include "G4ParticleDefinition.hh"
@@ -219,6 +220,19 @@ private:
 
 
   // Use Histograms to generate cosmics
+  // For WCTE
+  void Create_cosmics_histogram_wcte();
+  TH2D *hFluxEnergyCosmics = nullptr;
+
+  struct ReynaParameters {
+  	static constexpr double c0 = 0.00253;
+  	static constexpr double c1 = 0.2455;
+  	static constexpr double c2 = 1.288;
+  	static constexpr double c3 = -0.2555;
+  	static constexpr double c4 = 0.0209;
+  };
+
+  //for non-WCTE geometries
   void Create_cosmics_histogram();
   TH2D *hFluxCosmics  = nullptr;
   TH2D *hEmeanCosmics = nullptr;
