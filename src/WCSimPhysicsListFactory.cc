@@ -14,6 +14,12 @@
 
 #include "G4PhysicalConstants.hh"
 #include "G4SystemOfUnits.hh"
+#include "G4StepLimiter.hh"
+#include "G4PhysicsListHelper.hh"
+#include "G4Electron.hh"
+#include "G4Positron.hh"
+#include "G4MuonMinus.hh"
+#include "G4MuonPlus.hh"
 
 /* This code draws upon examples/extended/fields/field04 for inspiration */
 
@@ -59,6 +65,12 @@ void WCSimPhysicsListFactory::ConstructParticle()
 
 void WCSimPhysicsListFactory::ConstructProcess() {
     G4VModularPhysicsList::ConstructProcess();
+
+  G4PhysicsListHelper* helper = G4PhysicsListHelper::GetPhysicsListHelper();
+  helper->RegisterProcess(new G4StepLimiter(), G4Electron::Electron());
+  helper->RegisterProcess(new G4StepLimiter(), G4Positron::Positron());
+  helper->RegisterProcess(new G4StepLimiter(), G4MuonMinus::MuonMinus());
+  helper->RegisterProcess(new G4StepLimiter(), G4MuonPlus::MuonPlus());
     if (nCaptModelChoice.compareTo("Default", G4String::ignoreCase) == 0) return;
     G4ProcessTable *table = G4ProcessTable::GetProcessTable();
     G4ProcessManager *manager = G4Neutron::Neutron()->GetProcessManager();

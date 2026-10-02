@@ -4,6 +4,7 @@
 #include "G4UIcmdWithAString.hh"
 #include "G4UIcmdWithABool.hh"
 #include "G4UIcmdWithADouble.hh"
+#include "G4UIcmdWithADoubleAndUnit.hh"
 #include "G4ios.hh"
 
 WCSimPrimaryGeneratorMessenger::WCSimPrimaryGeneratorMessenger(WCSimPrimaryGeneratorAction* pointerToAction)
@@ -27,6 +28,10 @@ WCSimPrimaryGeneratorMessenger::WCSimPrimaryGeneratorMessenger(WCSimPrimaryGener
   fileNameCmd->SetDefaultValue("inputvectorfile");
 
   genSet = false;
+
+  gpsBeamPipeDiameterCmd = new G4UIcmdWithADoubleAndUnit("/mygen/gpsBeamPipeDiameter", this);
+  gpsBeamSigmaXCmd = new G4UIcmdWithADoubleAndUnit("/mygen/gpsBeamSigmaX", this);
+  gpsBeamSigmaYCmd = new G4UIcmdWithADoubleAndUnit("/mygen/gpsBeamSigmaY", this);
 
   //C. Vilela: Adding PMTPoisson for generating photoelectrons directly on PMTs according to a Poisson distribution.
   poisCmd = new G4UIcmdWithABool("/mygen/pmtPoisson",this);
@@ -277,6 +282,9 @@ WCSimPrimaryGeneratorMessenger::~WCSimPrimaryGeneratorMessenger()
   delete lightInjectorModeCmd;
   delete mPMTLEDIdCmd1;
   delete mPMTLEDIdCmd2;
+  delete gpsBeamPipeDiameterCmd;
+  delete gpsBeamSigmaXCmd;
+  delete gpsBeamSigmaYCmd;
 }
 
 void WCSimPrimaryGeneratorMessenger::SetNewValue(G4UIcommand * command,G4String newValue)
@@ -569,6 +577,13 @@ void WCSimPrimaryGeneratorMessenger::SetNewValue(G4UIcommand * command,G4String 
       myAction->SetmPMTledEvtGenerator(true);
     }
   }
+
+  if (command == gpsBeamPipeDiameterCmd)
+    myAction->SetGPSBeamPipeDiameter(gpsBeamPipeDiameterCmd->GetNewDoubleValue(newValue));
+  else if (command == gpsBeamSigmaXCmd)
+    myAction->SetGPSBeamSigmaX(gpsBeamSigmaXCmd->GetNewDoubleValue(newValue));
+  else if (command == gpsBeamSigmaYCmd)
+    myAction->SetGPSBeamSigmaY(gpsBeamSigmaYCmd->GetNewDoubleValue(newValue));
 
   if( command == fileNameCmd)
   {

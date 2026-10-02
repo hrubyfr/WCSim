@@ -571,6 +571,8 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructRealisticPlacement()
       InnerDetectorPhysical
     );
 
+    InnerDetectorLogic->SetUserLimits(new G4UserLimits(0.1*mm));
+
     // Optional inner phantom for creating a new logical away from the PMT tracking one
     // Currently the entire ID is treated as one volume. This slows tracking down
     // as every PMT needs to be intersection checked even when rays are far from the tank

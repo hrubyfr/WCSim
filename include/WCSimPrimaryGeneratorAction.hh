@@ -61,6 +61,10 @@ public:
   void SetNvtxs(G4int i)     { nvtxs = i; };
   void SetVtxs(G4int i, G4ThreeVector v)     { vtxs[i] = v; };
 
+  void SetGPSBeamPipeDiameter(G4double value) { gpsBeamPipeDiameter = value; }
+  void SetGPSBeamSigmaX(G4double value) { gpsBeamSigmaX = value; }
+  void SetGPSBeamSigmaY(G4double value) { gpsBeamSigmaY = value; }
+
   // These go with jhfNtuple
   G4int GetVecRecNumber(){return vecRecNumber;}
   G4int GetMode(int vertex = 0){return mode[vertex];};
@@ -125,6 +129,10 @@ private:
   G4String vectorFileName;
   G4String cosmicsFileName = "data/MuonFlux-HyperK-ThetaPhi.dat";
   G4bool   GenerateVertexInRock;
+
+  G4double gpsBeamPipeDiameter = 0.0;
+  G4double gpsBeamSigmaX = 0.0;
+  G4double gpsBeamSigmaY = 0.0;
 
   // AmBe Generator 
   WCSimAmBeGen* AmBeGen;

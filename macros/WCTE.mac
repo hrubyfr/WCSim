@@ -162,9 +162,25 @@
 # https://geant4-userdoc.web.cern.ch/UsersGuides/ForApplicationDeveloper/html/Control/AllResources/Control/UIcommands/_gps_.html
 /mygen/generator gps
 /gps/particle e-
-/gps/energy 500 MeV
-/gps/direction -1 0 0
-/gps/position 165 0 0
+
+##################
+# BEAM POSITION
+##################
+
+# Enable truncated Gaussian beam
+/mygen/gpsBeamPipeDiameter 12 cm
+/mygen/gpsBeamSigmaX 3.2 cm
+/mygen/gpsBeamSigmaY 3.2 cm
+
+# Beam pipe position and direction
+/gps/direction 0 0 1
+/gps/pos/type Beam
+/gps/pos/centre 0  -42.47625  -153.7963 cm
+
+# Gaussian energy spread around the nominal kinetic energy
+/gps/ene/type Gauss
+/gps/ene/mono 900 MeV
+/gps/ene/sigma 19.9 MeV
 
 # Or you can use the laser option
 # This is equivalent to the gps command, except that the gps particle energies are saved ignoring their mass
@@ -225,6 +241,9 @@
 ## Boolean to select whether to save the NEUT RooTracker vertices in the output file, provided you used
 ## a NEUT vector file as input
 /WCSimIO/SaveRooTracker 0
+
+## Save per-step secondary-particle and Cherenkov-photon truth trees
+/WCSimIO/SaveAllSecondaryTruthTrees true
 
 ## set a timer running on WCSimRunAction
 #/WCSimIO/Timer false

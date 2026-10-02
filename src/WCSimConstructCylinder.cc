@@ -242,6 +242,7 @@ G4LogicalVolume* WCSimDetectorConstruction::ConstructCylinder()
 						G4Material::GetMaterial(water),
 						"WCBarrel",
 						0,0,0);
+  logicWCBarrel->SetUserLimits(new G4UserLimits(0.1*mm));
 
   //G4VPhysicalVolume* physiWCBarrel = 
     new G4PVPlacement(0,

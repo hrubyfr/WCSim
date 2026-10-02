@@ -3,6 +3,7 @@
 #include "WCSimSteppingAction.hh"
 #include "WCSimDetectorConstruction.hh"
 #include "WCSimTrackInformation.hh"
+#include "WCSimAllSecondaryPhotonsTree.hh"
 
 #include "G4ParticleTypes.hh"
 #include "G4HCofThisEvent.hh"
@@ -18,6 +19,8 @@
 #include "G4SystemOfUnits.hh"
 
 #include <sstream>
+
+G4bool WCSimSaveAllSecondaryTruthTrees();
 
 
 WCSimWCSD::WCSimWCSD(G4String CollectionName,
@@ -287,6 +290,15 @@ G4bool WCSimWCSD::ProcessHits(G4Step* aStep, G4TouchableHistory*)
      }
   }
 
+  if (WCSimSaveAllSecondaryTruthTrees()) {
+    const G4Event* event = G4RunManager::GetRunManager()->GetCurrentEvent();
+    const G4double wavelength = photonEndEnergy > 0.
+        ? (h_Planck * c_light / photonEndEnergy) / nm : 0.;
+    AllSecondaryPhotonsTree_NotePE(
+        event ? event->GetEventID() : -1, trackID, replicaNumber,
+        static_cast<float>(hitTime / ns), static_cast<float>(wavelength));
+  }
+
   return true;
 }
 
@@ -448,6 +460,15 @@ G4bool WCSimWCSD::ProcessHits_boundary(G4Step* aStep, G4TouchableHistory*)
         
       }
     }
+  }
+
+  if (WCSimSaveAllSecondaryTruthTrees()) {
+    const G4Event* event = G4RunManager::GetRunManager()->GetCurrentEvent();
+    const G4double wavelength = photonEndEnergy > 0.
+        ? (h_Planck * c_light / photonEndEnergy) / nm : 0.;
+    AllSecondaryPhotonsTree_NotePE(
+        event ? event->GetEventID() : -1, trackID, replicaNumber,
+        static_cast<float>(hitTime / ns), static_cast<float>(wavelength));
   }
 
   return true;

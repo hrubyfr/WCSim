@@ -7,6 +7,16 @@
 #include "G4UIcmdWithAString.hh"
 #include "G4UIcmdWithABool.hh"
 
+namespace {
+G4bool saveAllSecondaryTruthTrees = true;
+G4UIcmdWithABool* saveAllSecondaryTruthTreesCommand = nullptr;
+}
+
+G4bool WCSimSaveAllSecondaryTruthTrees()
+{
+  return saveAllSecondaryTruthTrees;
+}
+
 WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
 :WCSimRun(WCSimRA)
 { 
@@ -39,6 +49,14 @@ WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
   UseTimer->SetGuidance("Use a timer for runtime");
   UseTimer->SetParameterName("UseTimer",true);
   UseTimer->SetDefaultValue(false);
+
+    saveAllSecondaryTruthTreesCommand = new G4UIcmdWithABool(
+      "/WCSimIO/SaveAllSecondaryTruthTrees", this);
+    saveAllSecondaryTruthTreesCommand->SetGuidance(
+      "Write per-step secondary particle and Cherenkov photon truth trees.");
+    saveAllSecondaryTruthTreesCommand->SetParameterName("SaveAllSecondaryTruthTrees", false);
+    saveAllSecondaryTruthTreesCommand->SetDefaultValue(true);
+    saveAllSecondaryTruthTreesCommand->AvailableForStates(G4State_PreInit, G4State_Idle);
 }
 
 WCSimRunActionMessenger::~WCSimRunActionMessenger()
@@ -48,11 +66,21 @@ WCSimRunActionMessenger::~WCSimRunActionMessenger()
   delete RootFile;
   delete RooTracker;
   delete UseTimer;
+  delete saveAllSecondaryTruthTreesCommand;
+  saveAllSecondaryTruthTreesCommand = nullptr;
   delete WCSimIODir;
 }
 
 void WCSimRunActionMessenger::SetNewValue(G4UIcommand* command,G4String newValue)
 {
+
+  if (command == saveAllSecondaryTruthTreesCommand) {
+    saveAllSecondaryTruthTrees =
+        saveAllSecondaryTruthTreesCommand->GetNewBoolValue(newValue);
+    G4cout << "Secondary truth trees "
+           << (saveAllSecondaryTruthTrees ? "ENABLED" : "DISABLED") << G4endl;
+    return;
+  }
 
   if ( command == RootFile)
     {

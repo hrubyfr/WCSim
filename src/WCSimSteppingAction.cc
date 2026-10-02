@@ -3,8 +3,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <WCSimRootEvent.hh>
-#include <G4SIunits.hh>
+//#include <G4SIunits.hh>
 #include <G4OpticalPhoton.hh>
+#include "G4SystemOfUnits.hh"
+#include "G4PhysicalConstants.hh"
 
 #include "G4Track.hh"
 #include "G4VProcess.hh"
@@ -15,13 +17,180 @@
 #include "G4PVReplica.hh"
 #include "G4SDManager.hh"
 #include "G4RunManager.hh"
+#include "G4EventManager.hh"
 #include "G4OpBoundaryProcess.hh"
+#include "WCSimAllSecondariesTree.hh"
+#include "WCSimAllSecondaryPhotonsTree.hh"
+#include <unordered_map>
+
+G4bool WCSimSaveAllSecondaryTruthTrees();
 
 G4int WCSimSteppingAction::n_photons_through_mPMTLV = 0;
 G4int WCSimSteppingAction::n_photons_through_acrylic = 0;
 G4int WCSimSteppingAction::n_photons_through_gel = 0;
 G4int WCSimSteppingAction::n_photons_on_blacksheet = 0;
 G4int WCSimSteppingAction::n_photons_on_smallPMT = 0;
+
+namespace {
+struct SecondaryPhotonInfo {
+  int event = -1;
+  int track = -1;
+  int parent = -1;
+  int parentPdg = 0;
+  int parentParent = -1;
+  int parentStep = -1;
+  float parentKE = 0.f;
+  G4ThreeVector position;
+  G4ThreeVector direction;
+  float time = 0.f;
+  float wavelength = 0.f;
+  std::string creator;
+  std::string parentCreator;
+};
+
+std::unordered_map<int, SecondaryPhotonInfo> secondaryPhotons;
+
+std::string VolumeName(const G4VPhysicalVolume* volume)
+{
+  return volume ? std::string(volume->GetName()) : std::string("NONE");
+}
+
+std::string MaterialName(const G4StepPoint* point)
+{
+  const G4Material* material = point ? point->GetMaterial() : nullptr;
+  return material ? std::string(material->GetName()) : std::string("NONE");
+}
+
+void FillAllSecondaries(const G4Step* step, const G4Event* event)
+{
+  const G4Track* track = step ? step->GetTrack() : nullptr;
+  if (!track || track->GetDefinition() == G4OpticalPhoton::OpticalPhotonDefinition()) return;
+
+  const G4StepPoint* pre = step->GetPreStepPoint();
+  const G4StepPoint* post = step->GetPostStepPoint();
+  const G4ParticleDefinition* definition = track->GetDefinition();
+  AllSecondariesTree_ResetVars();
+  alls_evt = event ? event->GetEventID() : -1;
+  alls_trk = track->GetTrackID();
+  alls_parent = track->GetParentID();
+  alls_pdg = definition ? definition->GetPDGEncoding() : 0;
+  alls_step = track->GetCurrentStepNumber();
+  if (pre) {
+    const G4ThreeVector position = pre->GetPosition();
+    const G4ThreeVector direction = pre->GetMomentumDirection();
+    alls_x_cm = position.x() / cm;
+    alls_y_cm = position.y() / cm;
+    alls_z_cm = position.z() / cm;
+    alls_t_ns = pre->GetGlobalTime() / ns;
+    alls_dir_x = direction.x();
+    alls_dir_y = direction.y();
+    alls_dir_z = direction.z();
+    alls_ke_MeV = pre->GetKineticEnergy() / MeV;
+    alls_volume = VolumeName(pre->GetPhysicalVolume());
+    alls_material = MaterialName(pre);
+  }
+  if (post) {
+    const G4ThreeVector position = post->GetPosition();
+    const G4ThreeVector direction = post->GetMomentumDirection();
+    alls_post_x_cm = position.x() / cm;
+    alls_post_y_cm = position.y() / cm;
+    alls_post_z_cm = position.z() / cm;
+    alls_post_t_ns = post->GetGlobalTime() / ns;
+    alls_post_dir_x = direction.x();
+    alls_post_dir_y = direction.y();
+    alls_post_dir_z = direction.z();
+    alls_post_ke_MeV = post->GetKineticEnergy() / MeV;
+    alls_post_volume = VolumeName(post->GetPhysicalVolume());
+    alls_post_material = MaterialName(post);
+    const G4VProcess* process = post->GetProcessDefinedStep();
+    alls_step_process = process ? process->GetProcessName() : "NONE";
+  }
+  alls_edep_MeV = step->GetTotalEnergyDeposit() / MeV;
+  alls_step_length_cm = step->GetStepLength() / cm;
+  alls_track_length_cm = track->GetTrackLength() / cm;
+  alls_charge = definition ? definition->GetPDGCharge() : 0.;
+  alls_particle = definition ? definition->GetParticleName() : "NONE";
+  const G4VProcess* creator = track->GetCreatorProcess();
+  alls_creator = creator ? creator->GetProcessName() : "NONE";
+  AllSecondariesTree_Fill();
+}
+
+void CacheSecondaryPhoton(const G4Step* step, const G4Event* event)
+{
+  const G4Track* track = step ? step->GetTrack() : nullptr;
+  if (!track || !event ||
+      track->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition()) return;
+  const G4VProcess* creator = track->GetCreatorProcess();
+  if (!creator || creator->GetProcessName() != "Cerenkov") return;
+  if (track->GetCurrentStepNumber() != 1) return;
+
+  SecondaryPhotonInfo info;
+  info.event = event->GetEventID();
+  info.track = track->GetTrackID();
+  info.parent = track->GetParentID();
+  info.parentKE = track->GetVertexKineticEnergy() / MeV;
+  info.position = track->GetVertexPosition();
+  info.direction = track->GetVertexMomentumDirection();
+  info.time = track->GetGlobalTime() / ns;
+  info.wavelength = track->GetVertexKineticEnergy() > 0.
+      ? static_cast<float>((h_Planck * c_light / track->GetVertexKineticEnergy()) / nm)
+      : 0.f;
+  info.creator = creator->GetProcessName();
+  secondaryPhotons[info.track] = info;
+}
+
+void FinishSecondaryPhoton(const G4Step* step, const G4Event* event)
+{
+  const G4Track* track = step ? step->GetTrack() : nullptr;
+  if (!track || !event ||
+      track->GetDefinition() != G4OpticalPhoton::OpticalPhotonDefinition() ||
+      track->GetTrackStatus() == fAlive) return;
+
+  auto found = secondaryPhotons.find(track->GetTrackID());
+  if (found == secondaryPhotons.end()) return;
+
+  const SecondaryPhotonInfo& info = found->second;
+  const G4StepPoint* post = step->GetPostStepPoint();
+  AllSecondaryPhotonsTree_ResetVars();
+  asph_evt = info.event;
+  asph_trk = info.track;
+  asph_parent = info.parent;
+  asph_parent_pdg = info.parentPdg;
+  asph_parent_parent = info.parentParent;
+  asph_parent_step = info.parentStep;
+  asph_pdg = track->GetDefinition()->GetPDGEncoding();
+  asph_parent_ke_MeV = info.parentKE;
+  asph_sx_cm = info.position.x() / cm;
+  asph_sy_cm = info.position.y() / cm;
+  asph_sz_cm = info.position.z() / cm;
+  asph_st_ns = info.time;
+  asph_dir_x = info.direction.x();
+  asph_dir_y = info.direction.y();
+  asph_dir_z = info.direction.z();
+  asph_lambda_nm = info.wavelength;
+  asph_end_x_cm = track->GetPosition().x() / cm;
+  asph_end_y_cm = track->GetPosition().y() / cm;
+  asph_end_z_cm = track->GetPosition().z() / cm;
+  asph_end_t_ns = track->GetGlobalTime() / ns;
+  asph_end_status = track->GetTrackStatus();
+  asph_creator = info.creator;
+  asph_end_process = post && post->GetProcessDefinedStep()
+      ? post->GetProcessDefinedStep()->GetProcessName() : "NONE";
+
+  const int eventId = event->GetEventID();
+  int pmt = -1;
+  float peTime = 0.f;
+  float peLambda = 0.f;
+  if (AllSecondaryPhotonsTree_GetPE(eventId, info.track, pmt, peTime, peLambda)) {
+    asph_made_pe = 1;
+    asph_pe_pmt = pmt;
+    asph_pe_time_ns = peTime;
+    asph_pe_lambda_nm = peLambda;
+  }
+  AllSecondaryPhotonsTree_Fill();
+  secondaryPhotons.erase(found);
+}
+}
 
 ///////////////////////////////////////////////
 ///// BEGINNING OF WCSIM STEPPING ACTION //////
@@ -34,9 +203,18 @@ WCSimSteppingAction::WCSimSteppingAction(WCSimRunAction *myRun, WCSimDetectorCon
 
 void WCSimSteppingAction::UserSteppingAction(const G4Step* aStep)
 {
+    if (!aStep) return;
     const G4Event *event = G4EventManager::GetEventManager()->GetConstCurrentEvent();
+    if (!event) return;
     if(event->IsAborted() || event->GetEventID() < 0)
       return;
+
+  if (WCSimSaveAllSecondaryTruthTrees())
+  {
+    FillAllSecondaries(aStep, event);
+    CacheSecondaryPhoton(aStep, event);
+    FinishSecondaryPhoton(aStep, event);
+  }
   //DISTORTION must be used ONLY if INNERTUBE or INNERTUBEBIG has been defined in BidoneDetectorConstruction.cc
   
   const G4Track* track       = aStep->GetTrack();

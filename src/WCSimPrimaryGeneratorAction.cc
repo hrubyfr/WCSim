@@ -923,6 +923,20 @@ void WCSimPrimaryGeneratorAction::GeneratePrimaries(G4Event* anEvent)
     {
         MyGPS->GeneratePrimaryVertex(anEvent);
 
+        if (gpsBeamPipeDiameter > 0.) {
+            G4PrimaryVertex* vertex = anEvent->GetPrimaryVertex();
+            const G4double x0 = vertex->GetX0();
+            const G4double y0 = vertex->GetY0();
+            const G4double radius = 0.5 * gpsBeamPipeDiameter;
+            G4double x = x0;
+            G4double y = y0;
+            do {
+                x = G4RandGauss::shoot(x0, gpsBeamSigmaX);
+                y = G4RandGauss::shoot(y0, gpsBeamSigmaY);
+            } while ((x - x0) * (x - x0) + (y - y0) * (y - y0) > radius * radius);
+            vertex->SetPosition(x, y, vertex->GetZ0());
+        }
+
         G4ThreeVector P   = anEvent->GetPrimaryVertex()->GetPrimary()->GetMomentum();
         G4ThreeVector vtx = anEvent->GetPrimaryVertex()->GetPosition();
         G4double mass     = anEvent->GetPrimaryVertex()->GetPrimary()->GetMass();
