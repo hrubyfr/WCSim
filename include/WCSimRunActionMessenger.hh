@@ -31,6 +31,8 @@ class WCSimRunActionMessenger: public G4UImessenger
   G4UIcmdWithABool* RooTracker;
 
   G4UIcmdWithABool*   UseTimer;
+  G4UIcmdWithABool* SavePrimaryParticleTruth;
+  G4UIcmdWithABool* SaveAllParticleTruth;
 
 };
 

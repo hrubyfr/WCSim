@@ -7,16 +7,6 @@
 #include "G4UIcmdWithAString.hh"
 #include "G4UIcmdWithABool.hh"
 
-namespace {
-G4bool saveAllSecondaryTruthTrees = true;
-G4UIcmdWithABool* saveAllSecondaryTruthTreesCommand = nullptr;
-}
-
-G4bool WCSimSaveAllSecondaryTruthTrees()
-{
-  return saveAllSecondaryTruthTrees;
-}
-
 WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
 :WCSimRun(WCSimRA)
 { 
@@ -50,13 +40,22 @@ WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
   UseTimer->SetParameterName("UseTimer",true);
   UseTimer->SetDefaultValue(false);
 
-    saveAllSecondaryTruthTreesCommand = new G4UIcmdWithABool(
-      "/WCSimIO/SaveAllSecondaryTruthTrees", this);
-    saveAllSecondaryTruthTreesCommand->SetGuidance(
-      "Write per-step secondary particle and Cherenkov photon truth trees.");
-    saveAllSecondaryTruthTreesCommand->SetParameterName("SaveAllSecondaryTruthTrees", false);
-    saveAllSecondaryTruthTreesCommand->SetDefaultValue(true);
-    saveAllSecondaryTruthTreesCommand->AvailableForStates(G4State_PreInit, G4State_Idle);
+    SavePrimaryParticleTruth = new G4UIcmdWithABool(
+      "/WCSimIO/SavePrimaryParticleTruth", this);
+    SavePrimaryParticleTruth->SetGuidance(
+      "Save step-by-step truth for primary non-optical particles.");
+    SavePrimaryParticleTruth->SetParameterName("SavePrimaryParticleTruth", false);
+    SavePrimaryParticleTruth->SetDefaultValue(true);
+    SavePrimaryParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
+
+    SaveAllParticleTruth = new G4UIcmdWithABool(
+      "/WCSimIO/SaveAllParticleTruth", this);
+    SaveAllParticleTruth->SetGuidance(
+      "Save step-by-step truth for all non-optical particles and Cerenkov photons.");
+    SaveAllParticleTruth->SetParameterName("SaveAllParticleTruth", false);
+    SaveAllParticleTruth->SetDefaultValue(true);
+    SaveAllParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
+
 }
 
 WCSimRunActionMessenger::~WCSimRunActionMessenger()
@@ -66,19 +65,25 @@ WCSimRunActionMessenger::~WCSimRunActionMessenger()
   delete RootFile;
   delete RooTracker;
   delete UseTimer;
-  delete saveAllSecondaryTruthTreesCommand;
-  saveAllSecondaryTruthTreesCommand = nullptr;
+  delete SavePrimaryParticleTruth;
+  delete SaveAllParticleTruth;
   delete WCSimIODir;
 }
 
 void WCSimRunActionMessenger::SetNewValue(G4UIcommand* command,G4String newValue)
 {
 
-  if (command == saveAllSecondaryTruthTreesCommand) {
-    saveAllSecondaryTruthTrees =
-        saveAllSecondaryTruthTreesCommand->GetNewBoolValue(newValue);
-    G4cout << "Secondary truth trees "
-           << (saveAllSecondaryTruthTrees ? "ENABLED" : "DISABLED") << G4endl;
+  if (command == SavePrimaryParticleTruth) {
+    const G4bool save = SavePrimaryParticleTruth->GetNewBoolValue(newValue);
+    WCSimRun->SetSavePrimaryParticleTruth(save);
+    G4cout << "Primary particle truth " << (save ? "ENABLED" : "DISABLED") << G4endl;
+    return;
+  }
+
+  if (command == SaveAllParticleTruth) {
+    const G4bool save = SaveAllParticleTruth->GetNewBoolValue(newValue);
+    WCSimRun->SetSaveAllParticleTruth(save);
+    G4cout << "All-particle truth " << (save ? "ENABLED" : "DISABLED") << G4endl;
     return;
   }
 

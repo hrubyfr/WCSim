@@ -35,6 +35,7 @@ class G4VPhysicalVolume;
 class WCSimTuningParameters;
 class WCSimDetectorMessenger;
 class WCSimWCSD;
+class WCSimAllSecondaryPhotonsCollector;
 
 //Move to G4Enumerations
 enum mPMT_orientation{
@@ -53,6 +54,11 @@ public:
 
   WCSimDetectorConstruction(G4int DetConfig,WCSimTuningParameters* WCSimTuningPars);
   ~WCSimDetectorConstruction();
+
+  void SetAllSecondaryPhotonsCollector(WCSimAllSecondaryPhotonsCollector* collector)
+  { allSecondaryPhotonsCollector = collector; }
+  WCSimAllSecondaryPhotonsCollector* GetAllSecondaryPhotonsCollector() const
+  { return allSecondaryPhotonsCollector; }
 
   G4LogicalVolume* ConstructRealisticPlacement();
 
@@ -523,6 +529,7 @@ private:
   // to check their state if we change the geometry, otherwise will segfault
   // between events!
   WCSimWCSD* aWCPMT;
+  WCSimAllSecondaryPhotonsCollector* allSecondaryPhotonsCollector = nullptr;
 
   //Water, Blacksheet surface
   G4OpticalSurface * OpWaterBSSurface;

@@ -242,8 +242,9 @@
 ## a NEUT vector file as input
 /WCSimIO/SaveRooTracker 0
 
-## Save per-step secondary-particle and Cherenkov-photon truth trees
-/WCSimIO/SaveAllSecondaryTruthTrees true
+## Save primary-only truth, or all-particle and Cherenkov-photon truth
+/WCSimIO/SavePrimaryParticleTruth true
+/WCSimIO/SaveAllParticleTruth true
 
 ## set a timer running on WCSimRunAction
 #/WCSimIO/Timer false

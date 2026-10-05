@@ -16,6 +16,8 @@
 #include "WCSimRootGeom.hh"
 #include "WCSimRootOptions.hh"
 #include "WCSimDetectorConstruction.hh"
+#include "WCSimAllSecondariesCollector.hh"
+#include "WCSimAllSecondaryPhotonsCollector.hh"
 #include "WCSimEnumerations.hh"                //ToDo: move more Enums over there!
 #include "evNtuple.h"
 #include "WCSimRandomParameters.hh"
@@ -37,6 +39,12 @@ public:
   void EndOfRunAction(const G4Run*);
   void SetRootFileName(G4String fname) { RootFileName = fname; }
   void SetSaveRooTracker(G4bool fsave) { SaveRooTracker = fsave; }
+  void SetSavePrimaryParticleTruth(G4bool save) { savePrimaryParticleTruth = save; }
+  void SetSaveAllParticleTruth(G4bool save) { saveAllParticleTruth = save; }
+  G4bool GetSavePrimaryParticleTruth() const { return savePrimaryParticleTruth; }
+  G4bool GetSaveAllParticleTruth() const { return saveAllParticleTruth; }
+  WCSimAllSecondariesCollector& GetAllSecondariesCollector() { return allSecondariesCollector; }
+  WCSimAllSecondaryPhotonsCollector& GetAllSecondaryPhotonsCollector() { return allSecondaryPhotonsCollector; }
   G4String GetRootFileName() { return RootFileName; }
   void SetOptionalRootFile(G4bool choice) { useDefaultROOTout = choice; }
   G4bool GetRootFileOption() { return useDefaultROOTout; }
@@ -160,6 +168,10 @@ public:
   WCSimRootOptions* wcsimrootoptions;
   WCSimDetectorConstruction* wcsimdetector;
   WCSimRandomParameters* wcsimrandomparameters;
+  G4bool savePrimaryParticleTruth = true;
+  G4bool saveAllParticleTruth = true;
+  WCSimAllSecondariesCollector allSecondariesCollector;
+  WCSimAllSecondaryPhotonsCollector allSecondaryPhotonsCollector;
 
   int numberOfEventsGenerated;
   int numberOfTimesWaterTubeHit;
