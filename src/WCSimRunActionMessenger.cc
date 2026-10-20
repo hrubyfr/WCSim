@@ -45,7 +45,7 @@ WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
   SavePrimaryParticleTruth->SetGuidance(
       "Save step-by-step truth for primary non-optical particles.");
   SavePrimaryParticleTruth->SetParameterName("SavePrimaryParticleTruth", false);
-  SavePrimaryParticleTruth->SetDefaultValue(true);
+  SavePrimaryParticleTruth->SetDefaultValue(false);
   SavePrimaryParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
 
   SaveAllParticleTruth = new G4UIcmdWithABool(
