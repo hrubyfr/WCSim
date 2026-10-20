@@ -40,22 +40,21 @@ WCSimRunActionMessenger::WCSimRunActionMessenger(WCSimRunAction* WCSimRA)
   UseTimer->SetParameterName("UseTimer",true);
   UseTimer->SetDefaultValue(false);
 
-    SavePrimaryParticleTruth = new G4UIcmdWithABool(
+  SavePrimaryParticleTruth = new G4UIcmdWithABool(
       "/WCSimIO/SavePrimaryParticleTruth", this);
-    SavePrimaryParticleTruth->SetGuidance(
+  SavePrimaryParticleTruth->SetGuidance(
       "Save step-by-step truth for primary non-optical particles.");
-    SavePrimaryParticleTruth->SetParameterName("SavePrimaryParticleTruth", false);
-    SavePrimaryParticleTruth->SetDefaultValue(true);
-    SavePrimaryParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
+  SavePrimaryParticleTruth->SetParameterName("SavePrimaryParticleTruth", false);
+  SavePrimaryParticleTruth->SetDefaultValue(true);
+  SavePrimaryParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
 
-    SaveAllParticleTruth = new G4UIcmdWithABool(
+  SaveAllParticleTruth = new G4UIcmdWithABool(
       "/WCSimIO/SaveAllParticleTruth", this);
-    SaveAllParticleTruth->SetGuidance(
+  SaveAllParticleTruth->SetGuidance(
       "Save step-by-step truth for all non-optical particles and Cerenkov photons.");
-    SaveAllParticleTruth->SetParameterName("SaveAllParticleTruth", false);
-    SaveAllParticleTruth->SetDefaultValue(true);
-    SaveAllParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
-
+  SaveAllParticleTruth->SetParameterName("SaveAllParticleTruth", false);
+  SaveAllParticleTruth->SetDefaultValue(false);
+  SaveAllParticleTruth->AvailableForStates(G4State_PreInit, G4State_Idle);
 }
 
 WCSimRunActionMessenger::~WCSimRunActionMessenger()
